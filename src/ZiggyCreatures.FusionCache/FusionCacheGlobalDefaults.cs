@@ -162,4 +162,14 @@ public static class FusionCacheGlobalDefaults
 	/// The global default <see cref="FusionCacheEntryOptions.EnableAutoClone"/>.
 	/// </summary>
 	public static bool EntryOptionsEnableAutoClone { get; set; } = false;
+
+	/// <summary>
+	/// The global default <see cref="FusionCacheEntryOptions.IsSliding"/>.
+	/// </summary>
+	public static bool EntryOptionsIsSliding { get; set; } = false;
+
+	/// <summary>
+	/// The global default <see cref="FusionCacheEntryOptions.SlidingExpiration"/>.
+	/// </summary>
+	public static TimeSpan? EntryOptionsSlidingExpiration { get; set; } = null;
 }
