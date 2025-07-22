@@ -1475,6 +1475,21 @@ public partial class L1Tests
 
 
 	[Fact]
+	public void SlidingExpirationSetup()
+    {
+        // Arrange
+        var options = new FusionCacheEntryOptions();
+        TimeSpan expectedSliding = TimeSpan.FromMinutes(5);
+
+        // Act
+        options.SetSliding(expectedSliding);
+
+        // Assert
+        Assert.NotNull(options);
+        Assert.Equal(expectedSliding, options.SlidingExpiration);
+    }
+
+	[Fact]
 	public void SlidingExpirationSimpleTest()
 	{
 		using var cache = new FusionCache(new FusionCacheOptions(){
