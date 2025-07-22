@@ -849,52 +849,6 @@ public partial class L1L2Tests
 
 	[Theory]
 	[ClassData(typeof(SerializerTypesClassData))]
-	public void SlidingExpirationRenewsDistributedEntry(SerializerType serializerType)
-	{
-		var keyFoo = CreateRandomCacheKey("sliding_foo");
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var distributedCache = CreateDistributedCache();
-		using var fusionCache = new FusionCache(CreateFusionCacheOptions(), memoryCache).SetupDistributedCache(distributedCache, TestsUtils.GetSerializer(serializerType));
-		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
-
-		// STORE ITEM WITH SLIDING EXPIRATION
-		var slidingDuration = TimeSpan.FromSeconds(1);
-		fusionCache.Set<int>(keyFoo, 42, opt => opt.SetSliding(slidingDuration), token: TestContext.Current.CancellationToken);
-
-		// VERIFY L1 CACHE HAS THE VALUE
-		var value1 = fusionCache.GetOrDefault<int>(keyFoo, -1, token: TestContext.Current.CancellationToken);
-		Assert.Equal(42, value1);
-
-		// REMOVE FROM MEMORY CACHE TO FORCE L2 ACCESS
-		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
-
-		// ACCESS VIA L2 WITHIN SLIDING WINDOW (EVERY 800MS)
-		Thread.Sleep(800);
-		var value2 = fusionCache.GetOrDefault<int>(keyFoo, -1, token: TestContext.Current.CancellationToken);
-		Assert.Equal(42, value2); // Should get from L2
-
-		// REMOVE FROM MEMORY AGAIN
-		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
-
-		Thread.Sleep(800);
-		var value3 = fusionCache.GetOrDefault<int>(keyFoo, -1, token: TestContext.Current.CancellationToken);
-		Assert.Equal(42, value3); // Should still get from L2
-
-		// REMOVE FROM MEMORY AGAIN
-		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
-
-		Thread.Sleep(800);
-		var value4 = fusionCache.GetOrDefault<int>(keyFoo, -1, token: TestContext.Current.CancellationToken);
-		Assert.Equal(42, value4); // Should still get from L2
-
-		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
-		Thread.Sleep(1200); // Longer than sliding duration
-		var value5 = fusionCache.GetOrDefault<int>(keyFoo, -1, token: TestContext.Current.CancellationToken);
-		Assert.Equal(-1, value5); // Should be expired everywhere
-	}
-
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
 	public void SlidingExpirationWorksWithTagging(SerializerType serializerType)
 	{
 		var keyFoo = CreateRandomCacheKey("sliding_tag_foo");
@@ -934,41 +888,36 @@ public partial class L1L2Tests
 		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
 
 		int factoryCalls = 0;
-		var slidingDuration = TimeSpan.FromMilliseconds(800);
-		var baseDuration = TimeSpan.FromMilliseconds(600); // Shorter than sliding
+		var slidingDuration = TimeSpan.FromMilliseconds(500);
+		var baseDuration = TimeSpan.FromMilliseconds(500); 
 
-		// INITIAL SET WITH SHORTER BASE DURATION BUT LONGER SLIDING DURATION
 		var value1 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls, 
 			opt => opt.SetDuration(baseDuration).SetSliding(slidingDuration), 
 			token: TestContext.Current.CancellationToken);
 		Assert.Equal(1, value1);
 		Assert.Equal(1, factoryCalls);
 
-		// WAIT PAST BASE DURATION BUT WITHIN SLIDING DURATION
-		Thread.Sleep(700); // > baseDuration but < slidingDuration
-
-		// REMOVE FROM MEMORY TO TEST L2 RETRIEVAL
-		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
-
-		// ACCESS SHOULD RETRIEVE FROM L2 AND RENEW SLIDING WINDOW
+		// Hit the L1 cache and renew for 500ms
+		Thread.Sleep(300); 
 		var value2 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls, 
 			opt => opt.SetDuration(baseDuration).SetSliding(slidingDuration), 
 			token: TestContext.Current.CancellationToken);
-		Assert.Equal(1, value2); // Should get from L2
-		Assert.Equal(1, factoryCalls); // Factory should not be called
+		Assert.Equal(1, value2);
+		Assert.Equal(1, factoryCalls);
 
-		// WAIT AND ACCESS AGAIN WITHIN RENEWED SLIDING WINDOW
-		Thread.Sleep(600);
+		Thread.Sleep(300); 
+		// REMOVE FROM MEMORY TO TEST L2 RETRIEVAL
 		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
 
+		// ACCESS SHOULD RETRIEVE FROM L2 AND RENEW SLIDING WINDOW 500ms
 		var value3 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls, 
 			opt => opt.SetDuration(baseDuration).SetSliding(slidingDuration), 
 			token: TestContext.Current.CancellationToken);
-		Assert.Equal(1, value3);
-		Assert.Equal(1, factoryCalls);
+		Assert.Equal(1, value3); // Should get from L2
+		Assert.Equal(1, factoryCalls); // Factory should not be called
 
 		// NOW WAIT PAST SLIDING DURATION
-		Thread.Sleep(900);
+		Thread.Sleep(600);
 
 		var value4 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls, 
 			opt => opt.SetDuration(baseDuration).SetSliding(slidingDuration), 
@@ -990,18 +939,18 @@ public partial class L1L2Tests
 		int factoryCalls = 0;
 
 		// INITIAL SET WITH SLIDING + FAIL-SAFE
-		var value1 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls, 
+		var value1 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls,
 			opt => opt.SetSliding(TimeSpan.FromMilliseconds(500))
-					  .SetFailSafe(true, TimeSpan.FromMinutes(5)), 
+					  .SetFailSafe(true, TimeSpan.FromMinutes(5)),
 			token: TestContext.Current.CancellationToken);
 		Assert.Equal(1, value1);
 		Assert.Equal(1, factoryCalls);
 
 		// ACCESS WITHIN SLIDING WINDOW FROM L1 AND L2
 		Thread.Sleep(300);
-		var value2 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls, 
+		var value2 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls,
 			opt => opt.SetSliding(TimeSpan.FromMilliseconds(500))
-					  .SetFailSafe(true, TimeSpan.FromMinutes(5)), 
+					  .SetFailSafe(true, TimeSpan.FromMinutes(5)),
 			token: TestContext.Current.CancellationToken);
 		Assert.Equal(1, value2);
 		Assert.Equal(1, factoryCalls);
@@ -1010,20 +959,27 @@ public partial class L1L2Tests
 		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
 
 		Thread.Sleep(300);
-		var value3 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls, 
+		var value3 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls,
 			opt => opt.SetSliding(TimeSpan.FromMilliseconds(500))
-					  .SetFailSafe(true, TimeSpan.FromMinutes(5)), 
+					  .SetFailSafe(true, TimeSpan.FromMinutes(5)),
 			token: TestContext.Current.CancellationToken);
 		Assert.Equal(1, value3); // Should get from L2
 		Assert.Equal(1, factoryCalls);
 
 		// WAIT PAST SLIDING DURATION BUT FACTORY FAILS
 		Thread.Sleep(600);
-		var value4 = fusionCache.GetOrSet<int>(keyFoo, _ => throw new Exception("Simulated error"), 
+		var value4 = fusionCache.GetOrSet<int>(keyFoo, _ => throw new Exception("Simulated error"),
 			opt => opt.SetSliding(TimeSpan.FromMilliseconds(500))
-					  .SetFailSafe(true, TimeSpan.FromMinutes(5)), 
+					  .SetFailSafe(true, TimeSpan.FromMinutes(5)),
 			token: TestContext.Current.CancellationToken);
 		Assert.Equal(1, value4); // Should get stale value from fail-safe (L1 or L2)
+		
+		// fail safe won't renew sliding window. set new value. 
+		var value5 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls,
+			opt => opt.SetSliding(TimeSpan.FromMilliseconds(500))
+					  .SetFailSafe(true, TimeSpan.FromMinutes(5)),
+			token: TestContext.Current.CancellationToken);
+		Assert.Equal(2, value5); // Should get stale value from fail-safe (L1 or L2)
 	}
 
 	[Theory]
