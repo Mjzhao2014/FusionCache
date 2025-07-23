@@ -10,6 +10,50 @@ namespace ZiggyCreatures.Caching.Fusion;
 
 public partial class FusionCache
 {
+	/// <summary>
+	/// Computes a new <see cref="FusionCacheEntryOptions"/> to use when renewing an entry's expiration for sliding expiration semantics.
+	/// </summary>
+	private FusionCacheEntryOptions ComputeRenewedOptions(FusionCacheEntryOptions options)
+	{
+		// Duplicate the current options but adjust Duration/DistributedCacheDuration based on SlidingExpiration
+		if (options.SlidingExpiration.HasValue == false)
+			return options;
+		var slide = options.SlidingExpiration.Value;
+		var baseDur = options.Duration;
+		var newDur = (slide > baseDur) ? slide : baseDur;
+		var newOptions = options.Duplicate(newDur);
+		if (options.DistributedCacheDuration.HasValue)
+		{
+			var distDur = options.DistributedCacheDuration.Value;
+			var newDistDur = (slide > distDur) ? slide : distDur;
+			newOptions.DistributedCacheDuration = newDistDur;
+		}
+		return newOptions;
+	}
+
+	/// <summary>
+	/// Renew the expiration for a cached entry using sliding expiration semantics.
+	/// This will update both memory and distributed caches as appropriate.
+	/// </summary>
+	private async ValueTask RenewEntryExpirationAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		// Only renew if it's still valid and not stale
+		if (entry.IsLogicallyExpired() || entry.IsStale())
+			return;
+		var newOptions = ComputeRenewedOptions(options);
+		// Recreate a new memory entry preserving the original timestamp and metadata
+		var newEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(entry.GetValue<TValue>(), entry.Timestamp, entry.Tags, newOptions, false, entry.Metadata?.LastModifiedTimestamp, entry.Metadata?.ETag);
+		if (_mca.ShouldWrite(newOptions))
+		{
+			_mca.SetEntry<TValue>(operationId, key, newEntry, newOptions);
+		}
+		if (RequiresDistributedOperations(newOptions))
+		{
+			await DistributedSetEntryAsync<TValue>(operationId, key, newEntry, newOptions, token).ConfigureAwait(false);
+		}
+	}
 	// GET OR SET
 
 	private void ExecuteEagerRefreshWithAsyncFactory<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, Task<TValue>> factory, FusionCacheEntryOptions options, IFusionCacheMemoryEntry memoryEntry, object memoryLockObj)
@@ -132,6 +176,9 @@ public partial class FusionCache
 			// RETURN THE ENTRY
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
+
+			// SLIDING EXPIRATION: RENEW TTL ON ACCESS
+			await RenewEntryExpirationAsync<TValue>(operationId, key, memoryEntry!, options, token).ConfigureAwait(false);
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
@@ -488,6 +535,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
 
+			// SLIDING EXPIRATION: RENEW TTL ON ACCESS
+			await RenewEntryExpirationAsync<TValue>(operationId, key, memoryEntry!, options, token).ConfigureAwait(false);
+
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 
@@ -540,6 +590,9 @@ public partial class FusionCache
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
 			}
+
+			// SLIDING EXPIRATION: RENEW TTL ON ACCESS
+			await RenewEntryExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
 
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);

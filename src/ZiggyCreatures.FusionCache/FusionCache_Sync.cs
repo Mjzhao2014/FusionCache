@@ -10,6 +10,28 @@ namespace ZiggyCreatures.Caching.Fusion;
 
 public partial class FusionCache
 {
+
+	/// <summary>
+	/// Renew the expiration for a cached entry using sliding expiration semantics.
+	/// This will update both memory and distributed caches as appropriate.
+	/// </summary>
+	private void RenewEntryExpiration<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		if (entry.IsLogicallyExpired() || entry.IsStale())
+			return;
+		var newOptions = ComputeRenewedOptions(options);
+		var newEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(entry.GetValue<TValue>(), entry.Timestamp, entry.Tags, newOptions, false, entry.Metadata?.LastModifiedTimestamp, entry.Metadata?.ETag);
+		if (_mca.ShouldWrite(newOptions))
+		{
+			_mca.SetEntry<TValue>(operationId, key, newEntry, newOptions);
+		}
+		if (RequiresDistributedOperations(newOptions))
+		{
+			DistributedSetEntry<TValue>(operationId, key, newEntry, newOptions, token);
+		}
+	}
 	// GET OR SET
 
 	private void ExecuteEagerRefreshWithSyncFactory<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, FusionCacheEntryOptions options, IFusionCacheMemoryEntry memoryEntry, object memoryLockObj)
@@ -132,6 +154,9 @@ public partial class FusionCache
 			// RETURN THE ENTRY
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
+
+			// SLIDING EXPIRATION: RENEW TTL ON ACCESS
+			RenewEntryExpiration<TValue>(operationId, key, memoryEntry!, options, token);
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
@@ -488,6 +513,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
 
+			// SLIDING EXPIRATION: RENEW TTL ON ACCESS
+			RenewEntryExpiration<TValue>(operationId, key, memoryEntry!, options, token);
+
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 
@@ -540,6 +568,9 @@ public partial class FusionCache
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
 			}
+
+			// SLIDING EXPIRATION: RENEW TTL ON ACCESS
+			RenewEntryExpiration<TValue>(operationId, key, memoryEntry, options, token);
 
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);

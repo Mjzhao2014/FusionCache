@@ -75,6 +75,33 @@ public sealed class FusionCacheEntryOptions
 	/// </summary>
 	public TimeSpan Duration { get; set; }
 
+	/// <summary>
+	/// The amount of time to use when resetting expiration on each access when using sliding expiration semantics.
+	/// If set, and the cached item is accessed and still valid (not expired and not served via fail-safe), the
+	/// expiration for the cached value will be recomputed according to this sliding timeout so that frequently
+	/// accessed items stay alive in the cache.
+	/// <br/><br/>
+	/// When both <see cref="Duration"/> and <see cref="SlidingExpiration"/> are set, the renewed expiration will be
+	/// the greater of <c>now + SlidingExpiration</c> and <c>now + Duration</c>.
+	/// <br/><br/>
+	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; }
+
+	/// <summary>
+	/// Enable sliding expiration with the specified sliding duration.
+	/// The expiration timer resets to this duration every time the cached item is accessed.
+	/// <br/><br/>
+	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
+	/// </summary>
+	/// <param name="slidingExpiration">The sliding expiration duration. If null, <see cref="Duration"/> will be used.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan? slidingExpiration = null)
+	{
+		SlidingExpiration = slidingExpiration;
+		return this;
+	}
+
 	private float? _eagerRefreshThreshold = null;
 
 	/// <summary>
@@ -455,7 +482,7 @@ public sealed class FusionCacheEntryOptions
 	/// <inheritdoc/>
 	public override string ToString()
 	{
-		return $"[DUR={Duration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
+		return $"[DUR={Duration.ToLogString()} SLID={SlidingExpiration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
 	}
 
 	/// <summary>
@@ -1087,6 +1114,7 @@ public sealed class FusionCacheEntryOptions
 			IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching,
 
 			Duration = duration ?? Duration,
+			SlidingExpiration = SlidingExpiration,
 			LockTimeout = LockTimeout,
 			Size = Size,
 			Priority = Priority,
