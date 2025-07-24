@@ -36,12 +36,12 @@ public partial class FusionCache
 							try
 							{
 								// THE DISTRIBUTED ENTRY IS MORE RECENT THAN THE MEMORY ENTRY -> USE IT
-								if (_mca.ShouldWrite(options))
+								if (_componentCoordinator.MemoryCacheAccessor.ShouldWrite(options))
 								{
 									if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 										_logger.LogTrace("FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): distributed entry found ({DistributedTimestamp}) is more recent than the current memory entry ({MemoryTimestamp}): using it", CacheName, InstanceId, operationId, key, distributedEntry?.Timestamp, memoryEntry?.Timestamp);
 
-									_mca.SetEntry<TValue>(operationId, key, FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options), options);
+									_componentCoordinator.MemoryCacheAccessor.SetEntry<TValue>(operationId, key, FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options), options);
 								}
 							}
 							finally
@@ -83,16 +83,16 @@ public partial class FusionCache
 
 	private IFusionCacheMemoryEntry? GetOrSetEntryInternal<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
 	{
-		options ??= _defaultEntryOptions;
+		options ??= _configurationManager.DefaultEntryOptions;
 
 		IFusionCacheMemoryEntry? memoryEntry = null;
 		bool memoryEntryIsValid = false;
 		object? memoryLockObj = null;
 
 		// DIRECTLY CHECK MEMORY CACHE (TO AVOID LOCKING)
-		if (_mca.ShouldRead(options))
+		if (_componentCoordinator.MemoryCacheAccessor.ShouldRead(options))
 		{
-			(memoryEntry, memoryEntryIsValid) = _mca.TryGetEntry(operationId, key);
+			(memoryEntry, memoryEntryIsValid) = _componentCoordinator.MemoryCacheAccessor.TryGetEntry(operationId, key);
 		}
 
 		// TAGGING
@@ -163,9 +163,9 @@ public partial class FusionCache
 			}
 
 			// TRY AGAIN WITH MEMORY CACHE (AFTER THE MEMORY LOCK HAS BEEN ACQUIRED, MAYBE SOMETHING CHANGED)
-			if (_mca.ShouldRead(options))
+			if (_componentCoordinator.MemoryCacheAccessor.ShouldRead(options))
 			{
-				(memoryEntry, memoryEntryIsValid) = _mca.TryGetEntry(operationId, key);
+				(memoryEntry, memoryEntryIsValid) = _componentCoordinator.MemoryCacheAccessor.TryGetEntry(operationId, key);
 			}
 
 			// TAGGING
@@ -320,10 +320,10 @@ public partial class FusionCache
 			// SAVING THE DATA IN THE MEMORY CACHE
 			if (entry is not null)
 			{
-				if (_mca.ShouldWrite(options))
-				{
-					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
-				}
+			if (_componentCoordinator.MemoryCacheAccessor.ShouldWrite(options))
+			{
+				_componentCoordinator.MemoryCacheAccessor.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+			}
 			}
 		}
 		finally
@@ -366,7 +366,7 @@ public partial class FusionCache
 	public TValue GetOrSet<TValue>(string key, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, MaybeValue<TValue> failSafeDefaultValue = default, FusionCacheEntryOptions? options = null, IEnumerable<string>? tags = null, CancellationToken token = default)
 	{
 		// METRIC
-		Metrics.CounterGetOrSet.Maybe()?.AddWithCommonTags(1, _options.CacheName, _options.InstanceId!);
+		Metrics.CounterGetOrSet.Maybe()?.AddWithCommonTags(1, _configurationManager.CacheName, _configurationManager.InstanceId!);
 
 		ValidateCacheKey(key);
 
@@ -401,7 +401,7 @@ public partial class FusionCache
 			}
 
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
-				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSet<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
+				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSet<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_configurationManager.Options.IncludeTagsInLogs));
 
 			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
 		}
@@ -417,7 +417,7 @@ public partial class FusionCache
 	public TValue GetOrSet<TValue>(string key, TValue defaultValue, FusionCacheEntryOptions? options = null, IEnumerable<string>? tags = null, CancellationToken token = default)
 	{
 		// METRIC
-		Metrics.CounterGetOrSet.Maybe()?.AddWithCommonTags(1, _options.CacheName, _options.InstanceId!);
+		Metrics.CounterGetOrSet.Maybe()?.AddWithCommonTags(1, _configurationManager.CacheName, _configurationManager.InstanceId!);
 
 		ValidateCacheKey(key);
 
@@ -449,7 +449,7 @@ public partial class FusionCache
 			}
 
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
-				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSet<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
+				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSet<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_configurationManager.Options.IncludeTagsInLogs));
 
 			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
 		}
@@ -465,16 +465,16 @@ public partial class FusionCache
 
 	private IFusionCacheMemoryEntry? TryGetEntryInternal<TValue>(string operationId, string key, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
 	{
-		options ??= _defaultEntryOptions;
+		options ??= _configurationManager.DefaultEntryOptions;
 
 		token.ThrowIfCancellationRequested();
 
 		IFusionCacheMemoryEntry? memoryEntry = null;
 		bool memoryEntryIsValid = false;
 
-		if (_mca.ShouldRead(options))
+		if (_componentCoordinator.MemoryCacheAccessor.ShouldRead(options))
 		{
-			(memoryEntry, memoryEntryIsValid) = _mca.TryGetEntry(operationId, key);
+			(memoryEntry, memoryEntryIsValid) = _componentCoordinator.MemoryCacheAccessor.TryGetEntry(operationId, key);
 		}
 
 		// TAGGING
@@ -536,9 +536,9 @@ public partial class FusionCache
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
 
 			// SAVING THE DATA IN THE MEMORY CACHE
-			if (_mca.ShouldWrite(options))
+			if (_componentCoordinator.MemoryCacheAccessor.ShouldWrite(options))
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				_componentCoordinator.MemoryCacheAccessor.SetEntry<TValue>(operationId, key, memoryEntry, options);
 			}
 
 			// EVENT
@@ -560,9 +560,9 @@ public partial class FusionCache
 				memoryEntry = distributedEntry.AsMemoryEntry<TValue>(options);
 
 				// SAVING THE DATA IN THE MEMORY CACHE
-				if (_mca.ShouldWrite(options))
+				if (_componentCoordinator.MemoryCacheAccessor.ShouldWrite(options))
 				{
-					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+					_componentCoordinator.MemoryCacheAccessor.SetEntry<TValue>(operationId, key, memoryEntry, options);
 				}
 
 				// EVENT
@@ -594,7 +594,7 @@ public partial class FusionCache
 	public MaybeValue<TValue> TryGet<TValue>(string key, FusionCacheEntryOptions? options = null, CancellationToken token = default)
 	{
 		// METRIC
-		Metrics.CounterTryGet.Maybe()?.AddWithCommonTags(1, _options.CacheName, _options.InstanceId!);
+		Metrics.CounterTryGet.Maybe()?.AddWithCommonTags(1, _configurationManager.CacheName, _configurationManager.InstanceId!);
 
 		ValidateCacheKey(key);
 
@@ -641,7 +641,7 @@ public partial class FusionCache
 	public TValue? GetOrDefault<TValue>(string key, TValue? defaultValue = default, FusionCacheEntryOptions? options = null, CancellationToken token = default)
 	{
 		// METRIC
-		Metrics.CounterGetOrDefault.Maybe()?.AddWithCommonTags(1, _options.CacheName, _options.InstanceId!);
+		Metrics.CounterGetOrDefault.Maybe()?.AddWithCommonTags(1, _configurationManager.CacheName, _configurationManager.InstanceId!);
 
 		ValidateCacheKey(key);
 
@@ -670,7 +670,7 @@ public partial class FusionCache
 			}
 
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
-				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrDefault<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
+				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrDefault<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_configurationManager.Options.IncludeTagsInLogs));
 
 			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
 		}
@@ -697,7 +697,7 @@ public partial class FusionCache
 
 		token.ThrowIfCancellationRequested();
 
-		options ??= _defaultEntryOptions;
+		options ??= _configurationManager.DefaultEntryOptions;
 
 		var operationId = MaybeGenerateOperationId();
 
@@ -712,9 +712,9 @@ public partial class FusionCache
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
-			if (_mca.ShouldWrite(options))
+			if (_componentCoordinator.MemoryCacheAccessor.ShouldWrite(options))
 			{
-				_mca.SetEntry<TValue>(operationId, key, entry, options);
+				_componentCoordinator.MemoryCacheAccessor.SetEntry<TValue>(operationId, key, entry, options);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -747,9 +747,9 @@ public partial class FusionCache
 
 		try
 		{
-			if (_mca.ShouldWrite(options))
+			if (_componentCoordinator.MemoryCacheAccessor.ShouldWrite(options))
 			{
-				_mca.RemoveEntry(operationId, key);
+				_componentCoordinator.MemoryCacheAccessor.RemoveEntry(operationId, key);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -777,7 +777,7 @@ public partial class FusionCache
 
 		token.ThrowIfCancellationRequested();
 
-		options ??= _defaultEntryOptions;
+		options ??= _configurationManager.DefaultEntryOptions;
 
 		RemoveInternal(key, options, token);
 	}
@@ -796,9 +796,9 @@ public partial class FusionCache
 
 		try
 		{
-			if (_mca.ShouldWrite(options))
+			if (_componentCoordinator.MemoryCacheAccessor.ShouldWrite(options))
 			{
-				_mca.ExpireEntry(operationId, key, null);
+				_componentCoordinator.MemoryCacheAccessor.ExpireEntry(operationId, key, null);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -826,7 +826,7 @@ public partial class FusionCache
 
 		token.ThrowIfCancellationRequested();
 
-		options ??= _defaultEntryOptions;
+		options ??= _configurationManager.DefaultEntryOptions;
 
 		ExpireInternal(key, options, token);
 	}
@@ -839,7 +839,7 @@ public partial class FusionCache
 		if (entry is null)
 			return (null, false);
 
-		if (_options.DisableTagging)
+		if (_configurationManager.Options.DisableTagging)
 			return (entry, entry.IsLogicallyExpired() == false);
 
 		if (key.StartsWith(TagInternalCacheKeyPrefix))
@@ -853,7 +853,7 @@ public partial class FusionCache
 		{
 			if (ClearRemoveTimestamp < 0 || (HasDistributedCache && HasBackplane == false))
 			{
-				var _tmp = GetOrSet<long>(ClearRemoveTagCacheKey, FusionCacheInternalUtils.SharedTagExpirationDataFactory, 0L, _tagsDefaultEntryOptions, FusionCacheInternalUtils.NoTags, token);
+				var _tmp = GetOrSet<long>(ClearRemoveTagCacheKey, FusionCacheInternalUtils.SharedTagExpirationDataFactory, 0L, _configurationManager.TagsDefaultEntryOptions, FusionCacheInternalUtils.NoTags, token);
 
 				var _tmp2 = Interlocked.Exchange(ref ClearRemoveTimestamp, _tmp);
 
@@ -878,7 +878,7 @@ public partial class FusionCache
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): cascade remove entry", CacheName, InstanceId, operationId, key);
 
-				RemoveInternal(key, _cascadeRemoveByTagEntryOptions, token);
+				RemoveInternal(key, _configurationManager.CascadeRemoveByTagEntryOptions, token);
 
 				return (null, false);
 			}
@@ -889,7 +889,7 @@ public partial class FusionCache
 		{
 			foreach (var tag in tags)
 			{
-				var tagExpiration = GetOrSet<long>(GetTagCacheKey(tag), FusionCacheInternalUtils.SharedTagExpirationDataFactory, 0L, _tagsDefaultEntryOptions, FusionCacheInternalUtils.NoTags, token);
+				var tagExpiration = GetOrSet<long>(GetTagCacheKey(tag), FusionCacheInternalUtils.SharedTagExpirationDataFactory, 0L, _configurationManager.TagsDefaultEntryOptions, FusionCacheInternalUtils.NoTags, token);
 				if (entryTimestamp <= tagExpiration)
 				{
 					// NOT VALID, VIA REMOVE BY TAG
@@ -903,7 +903,7 @@ public partial class FusionCache
 					if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 						_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): cascade expire entry", CacheName, InstanceId, operationId, key);
 
-					ExpireInternal(key, _cascadeRemoveByTagEntryOptions, token);
+						ExpireInternal(key, _configurationManager.CascadeRemoveByTagEntryOptions, token);
 
 					return (entry, false);
 				}
@@ -922,7 +922,7 @@ public partial class FusionCache
 			}
 			else
 			{
-				var _tmp = GetOrSet<long>(ClearExpireTagCacheKey, FusionCacheInternalUtils.SharedTagExpirationDataFactory, 0L, _tagsDefaultEntryOptions, FusionCacheInternalUtils.NoTags, token);
+				var _tmp = GetOrSet<long>(ClearExpireTagCacheKey, FusionCacheInternalUtils.SharedTagExpirationDataFactory, 0L, _configurationManager.TagsDefaultEntryOptions, FusionCacheInternalUtils.NoTags, token);
 
 				var _tmp2 = Interlocked.Exchange(ref ClearExpireTimestamp, _tmp);
 
@@ -948,7 +948,7 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): cascade expire entry", CacheName, InstanceId, operationId, key);
 
-			ExpireInternal(key, _cascadeRemoveByTagEntryOptions, token);
+			ExpireInternal(key, _configurationManager.CascadeRemoveByTagEntryOptions, token);
 
 			return (entry, false);
 		}
@@ -976,7 +976,7 @@ public partial class FusionCache
 
 		var operationId = MaybeGenerateOperationId();
 
-		options ??= _tagsDefaultEntryOptions;
+		options ??= _configurationManager.TagsDefaultEntryOptions;
 
 		if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 			_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): RemoveByTag call {Options}", CacheName, InstanceId, operationId, options.ToLogString());
@@ -986,7 +986,7 @@ public partial class FusionCache
 
 		try
 		{
-			if (_options.IncludeTagsInTraces)
+			if (_configurationManager.Options.IncludeTagsInTraces)
 			{
 				activity?.AddTag(Tags.Names.OperationTag, tag);
 			}
@@ -1039,7 +1039,7 @@ public partial class FusionCache
 
 		var operationId = MaybeGenerateOperationId();
 
-		options ??= _tagsDefaultEntryOptions;
+		options ??= _configurationManager.TagsDefaultEntryOptions;
 
 		if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 			_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): Clear({AllowFailSafe}) call {Options}", CacheName, InstanceId, operationId, allowFailSafe, options.ToLogString());
@@ -1265,7 +1265,7 @@ public partial class FusionCache
 
 			try
 			{
-				var (distributedEntry, isValid) = dca.TryGetEntry<TValue>(operationId, key, _tryUpdateEntryOptions, false, Timeout.InfiniteTimeSpan, default);
+				var (distributedEntry, isValid) = dca.TryGetEntry<TValue>(operationId, key, _configurationManager.TryUpdateEntryOptions, false, Timeout.InfiniteTimeSpan, default);
 
 				if (distributedEntry is null || isValid == false)
 				{
@@ -1299,7 +1299,7 @@ public partial class FusionCache
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): updating memory entry from distributed entry", CacheName, InstanceId, operationId, key);
 
 
-				_mca.UpdateEntryFromDistributedEntry(operationId, key, memoryEntry, distributedEntry);
+				_componentCoordinator.MemoryCacheAccessor.UpdateEntryFromDistributedEntry(operationId, key, memoryEntry, distributedEntry);
 				//memoryEntry.UpdateFromDistributedEntry(distributedEntry);
 
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
