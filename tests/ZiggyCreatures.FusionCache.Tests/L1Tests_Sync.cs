@@ -1450,9 +1450,9 @@ public partial class L1Tests
 
         // Assert
         Assert.NotNull(options);
-        Assert.Equal(expectedSliding, options.SlidingExpiration);
+		Assert.Equal(expectedSliding, options.SlidingExpiration);
+		Assert.Equal(TimeSpan.MaxValue, options.Duration);
     }
-
 
 	[Fact]
 	public void SlidingExpirationNoDuration()
@@ -1463,6 +1463,8 @@ public partial class L1Tests
 				SlidingExpiration = TimeSpan.FromMilliseconds(500) // Duration is same as SlidingExpiration
 			}
 		});
+
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
 
 		// SET WITH SLIDING EXPIRATION
 		cache.Set<int>("foo", 42);
