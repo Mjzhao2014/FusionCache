@@ -1437,6 +1437,36 @@ public partial class L1Tests
 		Assert.Equal(1, expectedOne);
 	}
 
+	[Fact]
+	public async Task SlidingExpirationOverrideDefaultDurationAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) // Duration is same as SlidingExpiration
+			}
+		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
+		// SET WITH SLIDING EXPIRATION
+		await cache.GetOrSetAsync<int>("foo",async _ => 42, opt => opt.SetDuration(TimeSpan.FromMilliseconds(500)));
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value1);
+
+		// Override the default duration. entry will be expired 
+		Thread.Sleep(300);
+		var value2 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value2);
+
+		Thread.Sleep(300);
+		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(-1, value3); //expired.
+    }
 
 
 	[Fact]
