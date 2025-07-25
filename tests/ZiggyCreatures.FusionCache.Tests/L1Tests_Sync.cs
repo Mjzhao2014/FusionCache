@@ -1455,6 +1455,37 @@ public partial class L1Tests
     }
 
 	[Fact]
+	public void SlidingExpirationOverrideDefaultDuration()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) // Duration is same as SlidingExpiration
+			}
+		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
+		// SET WITH SLIDING EXPIRATION
+		cache.Set<int>("foo", 42, opt => opt.SetDuration(TimeSpan.FromMilliseconds(500)));
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value1);
+
+		// Override the default duration. entry will be expired 
+		Thread.Sleep(300);
+		var value2 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		Thread.Sleep(300);
+		var value3 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(-1, value3); //expired.
+    }
+
+	[Fact]
 	public void SlidingExpirationNoDuration()
 	{
 		using var cache = new FusionCache(new FusionCacheOptions(){
@@ -1463,8 +1494,6 @@ public partial class L1Tests
 				SlidingExpiration = TimeSpan.FromMilliseconds(500) // Duration is same as SlidingExpiration
 			}
 		});
-
-		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
 
 		// SET WITH SLIDING EXPIRATION
 		cache.Set<int>("foo", 42);
