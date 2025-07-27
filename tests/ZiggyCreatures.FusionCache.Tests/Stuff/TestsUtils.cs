@@ -155,31 +155,6 @@ public static class TestsUtils
 		return (typeof(FusionCache).GetField("_plugins", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache) as List<IFusionCachePlugin>)?.ToArray();
 	}
 
-	// COMPONENT COORDINATOR ACCESS
-
-	public static dynamic GetComponentCoordinator(IFusionCache cache)
-	{
-		return typeof(FusionCache).GetField("_componentCoordinator", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache)!;
-	}
-
-	public static dynamic GetConfigurationManager(IFusionCache cache)
-	{
-		return typeof(FusionCache).GetField("_configurationManager", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache)!;
-	}
-
-	public static dynamic GetPluginManager(IFusionCache cache)
-	{
-		return typeof(FusionCache).GetField("_pluginManager", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache)!;
-	}
-
-	// AUTO RECOVERY ACCESS
-
-	public static dynamic GetAutoRecoveryService(IFusionCache cache)
-	{
-		var coordinator = GetComponentCoordinator(cache);
-		return coordinator.AutoRecovery;
-	}
-
 	private static readonly TimeSpan StopwatchExtraPadding = TimeSpan.FromMilliseconds(5);
 	public static TimeSpan GetElapsedWithSafePad(this Stopwatch sw)
 	{
