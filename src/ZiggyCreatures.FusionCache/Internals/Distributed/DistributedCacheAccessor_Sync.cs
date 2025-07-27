@@ -16,13 +16,22 @@ internal partial class DistributedCacheAccessor
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
 
-			RunUtils.RunSyncActionWithTimeout(action, Timeout.InfiniteTimeSpan, true, token: token);
+                        RunUtils.RunSyncActionWithTimeout(action, Timeout.InfiniteTimeSpan, true, token: token);
 
-			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
-				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
-		}
-		catch (Exception exc)
-		{
+                        if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+                                _logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
+
+                        _breaker.OnSuccess(out var breakerChanged);
+                        if (breakerChanged)
+                        {
+                                if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+                                        _logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
+
+                                _events.OnCircuitBreakerChange(operationId, key, true);
+                        }
+                }
+                catch (Exception exc)
+                {
 			ProcessError(operationId, key, exc, actionDescription);
 
 			// ACTIVITY
