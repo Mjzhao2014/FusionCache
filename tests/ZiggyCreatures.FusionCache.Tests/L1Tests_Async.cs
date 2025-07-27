@@ -1505,7 +1505,7 @@ public partial class L1Tests
 
 
 	[Fact]
-	public async Task SlidingExpirationNoDurationCappedByDefaultDurationAsync()
+	public async Task SlidingExpirationNoDurationNotExpiredAsync()
 	{
 		//Default duration is 30s 
 		using var cache = new FusionCache(new FusionCacheOptions()
@@ -1533,10 +1533,10 @@ public partial class L1Tests
 		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
 		Assert.Equal(42, value3);
 
-		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		// NOW WAIT LONGER THAN 30s default duraiton. Sliding Cache won't be expired.
 		Thread.Sleep(11000);
 		var value4 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
-		Assert.Equal(-1, value4); // Should be expired
+		Assert.Equal(42, value4); // cache is not expired. 
 	}
 
 
