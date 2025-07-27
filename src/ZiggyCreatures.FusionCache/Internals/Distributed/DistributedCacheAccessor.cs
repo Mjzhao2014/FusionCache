@@ -13,7 +13,7 @@ internal sealed partial class DistributedCacheAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheDistributedEventsHub _events;
-	private readonly SimpleCircuitBreaker _breaker;
+    private readonly ICircuitBreaker _breaker;
 	private readonly string _wireFormatToken;
 
 	public DistributedCacheAccessor(IDistributedCache distributedCache, IFusionCacheSerializer serializer, FusionCacheOptions options, ILogger? logger, FusionCacheDistributedEventsHub events)
@@ -32,8 +32,13 @@ internal sealed partial class DistributedCacheAccessor
 		_logger = logger;
 		_events = events;
 
-		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerDuration);
+        // CIRCUIT-BREAKER
+        if (options.DistributedCacheUseAdvancedCircuitBreaker)
+                _breaker = new AdvancedCircuitBreaker(options.DistributedCacheCircuitBreakerFailureThreshold,
+                        options.DistributedCacheCircuitBreakerSamplingDuration,
+                        options.DistributedCacheCircuitBreakerDuration);
+        else
+                _breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerDuration);
 
 		// WIRE FORMAT SETUP
 		_wireFormatToken = _options.DistributedCacheKeyModifierMode switch

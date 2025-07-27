@@ -3,7 +3,7 @@
 /// <summary>
 /// A simple, reusable circuit-breaker.
 /// </summary>
-internal sealed class SimpleCircuitBreaker
+internal sealed class SimpleCircuitBreaker : ICircuitBreaker
 {
 	private const int CircuitStateClosed = 0;
 	private const int CircuitStateOpen = 1;

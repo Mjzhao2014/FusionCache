@@ -11,7 +11,7 @@ internal sealed partial class BackplaneAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheBackplaneEventsHub _events;
-	private readonly SimpleCircuitBreaker _breaker;
+    private readonly ICircuitBreaker _breaker;
 
 	public BackplaneAccessor(FusionCache cache, IFusionCacheBackplane backplane, FusionCacheOptions options, ILogger? logger)
 	{
@@ -29,8 +29,13 @@ internal sealed partial class BackplaneAccessor
 		_logger = logger;
 		_events = _cache.Events.Backplane;
 
-		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerDuration);
+        // CIRCUIT-BREAKER
+        if (options.BackplaneUseAdvancedCircuitBreaker)
+                _breaker = new AdvancedCircuitBreaker(options.BackplaneCircuitBreakerFailureThreshold,
+                        options.BackplaneCircuitBreakerSamplingDuration,
+                        options.BackplaneCircuitBreakerDuration);
+        else
+                _breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerDuration);
 	}
 
 	public IFusionCacheBackplane Backplane

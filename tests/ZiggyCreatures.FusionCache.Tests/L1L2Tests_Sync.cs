@@ -112,7 +112,7 @@ public partial class L1L2Tests
 
 	[Theory]
 	[ClassData(typeof(SerializerTypesClassData))]
-	public void DistributedCacheCircuitBreakerActuallyWorks(SerializerType serializerType)
+        public void DistributedCacheCircuitBreakerActuallyWorks(SerializerType serializerType)
 	{
 		var keyFoo = CreateRandomCacheKey("foo");
 
@@ -137,8 +137,42 @@ public partial class L1L2Tests
 		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
 		var res = fusionCache.GetOrDefault<int>(keyFoo, -1, token: TestContext.Current.CancellationToken);
 
-		Assert.Equal(1, res);
-	}
+                Assert.Equal(1, res);
+        }
+
+        [Theory]
+        [ClassData(typeof(SerializerTypesClassData))]
+        public void DistributedCacheAdvancedCircuitBreakerWorks(SerializerType serializerType)
+        {
+                var keyFoo = CreateRandomCacheKey("foo");
+
+                var circuitBreakerDuration = TimeSpan.FromSeconds(1);
+                var distributedCache = CreateDistributedCache();
+                var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
+
+                using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+                var options = CreateFusionCacheOptions();
+                options.EnableAutoRecovery = false;
+                options.DistributedCacheUseAdvancedCircuitBreaker = true;
+                options.DistributedCacheCircuitBreakerFailureThreshold = 0.5;
+                options.DistributedCacheCircuitBreakerSamplingDuration = TimeSpan.FromMilliseconds(200);
+                options.DistributedCacheCircuitBreakerDuration = circuitBreakerDuration;
+                using var fusionCache = new FusionCache(options, memoryCache);
+                fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+                fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
+
+                fusionCache.Set<int>(keyFoo, 1, options => options.SetDurationSec(60).SetFailSafe(true), token: TestContext.Current.CancellationToken);
+                chaosDistributedCache.SetAlwaysThrow();
+                fusionCache.Set<int>(keyFoo, 2, options => options.SetDurationSec(60).SetFailSafe(true), token: TestContext.Current.CancellationToken);
+                fusionCache.Set<int>(keyFoo, 3, options => options.SetDurationSec(60).SetFailSafe(true), token: TestContext.Current.CancellationToken);
+                chaosDistributedCache.SetNeverThrow();
+                fusionCache.Set<int>(keyFoo, 4, options => options.SetDurationSec(60).SetFailSafe(true), token: TestContext.Current.CancellationToken);
+                Thread.Sleep(circuitBreakerDuration.PlusALittleBit());
+                memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
+                var res = fusionCache.GetOrDefault<int>(keyFoo, -1, token: TestContext.Current.CancellationToken);
+
+                Assert.Equal(1, res);
+        }
 
 	private void _DistributedCacheWireVersionModifierWorks(SerializerType serializerType, CacheKeyModifierMode modifierMode)
 	{
