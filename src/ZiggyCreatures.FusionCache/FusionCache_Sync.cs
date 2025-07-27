@@ -136,6 +136,12 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: if configured, renew expiration on access
+			if (options.SlidingExpiration.HasValue && memoryEntry.IsStale() == false)
+			{
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options);
+			}
+
 			return memoryEntry;
 		}
 
@@ -182,6 +188,12 @@ public partial class FusionCache
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
+				// SLIDING EXPIRATION: if configured, renew expiration on each access of a valid entry
+				if (options.SlidingExpiration.HasValue && memoryEntry.IsStale() == false)
+				{
+					RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options);
+				}
+
 				return memoryEntry;
 			}
 
@@ -210,6 +222,19 @@ public partial class FusionCache
 			{
 				isStale = false;
 				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				if (options.SlidingExpiration.HasValue && entry.IsStale() == false)
+				{
+					// apply sliding renewal in both memory and distributed levels
+					RenewSlidingExpiration<TValue>(operationId, key, entry, options);
+				}
+				else
+				{
+					// SAVING THE DATA IN THE MEMORY CACHE
+					if (_mca.ShouldWrite(options))
+					{
+						_mca.SetEntry<TValue>(operationId, key, entry, options);
+					}
+				}
 			}
 			else
 			{
@@ -221,11 +246,11 @@ public partial class FusionCache
 
 					entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tags, options, isStale, null, null);
 				}
-				else
-				{
-					Task<TValue>? factoryTask = null;
+		else
+		{
+			Task<TValue>? factoryTask = null;
 
-					var timeout = options.GetAppropriateFactoryTimeout(memoryEntry is not null || distributedEntry is not null);
+			var timeout = options.GetAppropriateFactoryTimeout(memoryEntry is not null || distributedEntry is not null);
 
 					if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 						_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling the factory (timeout={Timeout})", CacheName, InstanceId, operationId, key, timeout.ToLogString_Timeout());
@@ -491,6 +516,12 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: if configured, renew expiration on each access of a valid entry
+			if (options.SlidingExpiration.HasValue && memoryEntry.IsStale() == false)
+			{
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options);
+			}
+
 			return memoryEntry;
 		}
 
@@ -534,11 +565,18 @@ public partial class FusionCache
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
 
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (_mca.ShouldWrite(options))
+			if (options.SlidingExpiration.HasValue && memoryEntry.IsStale() == false)
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				// if sliding expiration is configured, renew TTLs with sliding logic when copying into memory cache
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options);
+			}
+			else
+			{
+				// SAVING THE DATA IN THE MEMORY CACHE
+				if (_mca.ShouldWrite(options))
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				}
 			}
 
 			// EVENT
@@ -679,6 +717,58 @@ public partial class FusionCache
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			activity?.AddException(exc);
 			throw;
+		}
+	}
+
+	/// <summary>
+	/// When sliding expiration is configured and a fresh entry is accessed, renew its expiration in both memory and distributed caches.
+	/// </summary>
+	private void RenewSlidingExpiration<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options)
+	{
+		if (options.SlidingExpiration is null)
+			return;
+		// only renew if the entry is still logically valid
+		if (entry.IsLogicallyExpired())
+			return;
+		var now = DateTimeOffset.UtcNow;
+		// compute sliding absolute expiration for memory cache
+		var memAbsExp = now.Add(options.SlidingExpiration.Value);
+		if (options.Duration != TimeSpan.MaxValue)
+		{
+			var absLimit = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(options.Duration);
+			if (memAbsExp > absLimit)
+				memAbsExp = absLimit;
+		}
+		var memDuration = memAbsExp - now;
+		if (memDuration < TimeSpan.Zero)
+			memDuration = TimeSpan.Zero;
+		var memOptions = options.Duplicate();
+		memOptions.Duration = memDuration;
+		// override fail-safe in this ephemeral set so we can control TTL
+		memOptions.IsFailSafeEnabled = false;
+		if (_mca.ShouldWrite(memOptions))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, memOptions);
+		}
+		// update distributed cache TTL as well
+		var dca = DistributedCacheAccessor;
+		if (dca is not null && dca.ShouldWrite(options) && dca.CanBeUsed(operationId, key))
+		{
+			var baseDuration = options.DistributedCacheDuration ?? options.Duration;
+			var distAbsExp = now.Add(options.SlidingExpiration.Value);
+			if (baseDuration != TimeSpan.MaxValue)
+			{
+				var distAbsLimit = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(baseDuration);
+				if (distAbsExp > distAbsLimit)
+					distAbsExp = distAbsLimit;
+			}
+			var distDuration = distAbsExp - now;
+			if (distDuration < TimeSpan.Zero)
+				distDuration = TimeSpan.Zero;
+			var distOptions = options.Duplicate();
+			distOptions.DistributedCacheDuration = distDuration;
+			distOptions.IsFailSafeEnabled = false;
+			dca.SetEntry<TValue>(operationId, key, entry, distOptions, false, default);
 		}
 	}
 

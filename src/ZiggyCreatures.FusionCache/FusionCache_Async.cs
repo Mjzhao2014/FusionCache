@@ -136,6 +136,12 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: if configured, renew expiration on each access of a valid entry
+			if (options.SlidingExpiration.HasValue && memoryEntry.IsStale() == false)
+			{
+				await RenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options).ConfigureAwait(false);
+			}
+
 			return memoryEntry;
 		}
 
@@ -206,10 +212,24 @@ public partial class FusionCache
 				(distributedEntry, distributedEntryIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, key, distributedEntry, false, token).ConfigureAwait(false);
 			}
 
-			if (distributedEntryIsValid)
+		if (distributedEntryIsValid)
+		{
+			isStale = false;
+			entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+			// if sliding expiration configured, renew TTL upon inserting into memory cache instead of normal set
+			if (options.SlidingExpiration.HasValue && (entry.IsStale() == false))
 			{
-				isStale = false;
-				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				await RenewSlidingExpirationAsync<TValue>(operationId, key, entry, options).ConfigureAwait(false);
+				// skip normal _mca.SetEntry because renewal will handle memory cache persistence
+			}
+			else
+			{
+				// SAVING THE DATA IN THE MEMORY CACHE
+				if (_mca.ShouldWrite(options))
+				{
+					_mca.SetEntry<TValue>(operationId, key, entry, options);
+				}
+			}
 			}
 			else
 			{
@@ -491,6 +511,12 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: if configured, renew expiration on each access of a valid entry
+			if (options.SlidingExpiration.HasValue && memoryEntry.IsStale() == false)
+			{
+				await RenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options).ConfigureAwait(false);
+			}
+
 			return memoryEntry;
 		}
 
@@ -528,17 +554,23 @@ public partial class FusionCache
 			(distributedEntry, distributedEntryIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, key, distributedEntry, true, token).ConfigureAwait(false);
 		}
 
-		if (distributedEntryIsValid)
+	if (distributedEntryIsValid)
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
 
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (_mca.ShouldWrite(options))
+			if (options.SlidingExpiration.HasValue && memoryEntry.IsStale() == false)
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				await RenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options).ConfigureAwait(false);
+			}
+			else
+			{
+				// SAVING THE DATA IN THE MEMORY CACHE
+				if (_mca.ShouldWrite(options))
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				}
 			}
 
 			// EVENT
@@ -679,6 +711,54 @@ public partial class FusionCache
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			activity?.AddException(exc);
 			throw;
+		}
+	}
+
+	/// <summary>
+	/// When sliding expiration is configured and a fresh entry is accessed, renew its expiration in both memory and distributed caches.
+	/// </summary>
+	private async ValueTask RenewSlidingExpirationAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options)
+	{
+		if (options.SlidingExpiration is null)
+			return;
+		if (entry.IsLogicallyExpired())
+			return;
+		var now = DateTimeOffset.UtcNow;
+		var memAbsExp = now.Add(options.SlidingExpiration.Value);
+		if (options.Duration != TimeSpan.MaxValue)
+		{
+			var absLimit = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(options.Duration);
+			if (memAbsExp > absLimit)
+				memAbsExp = absLimit;
+		}
+		var memDuration = memAbsExp - now;
+		if (memDuration < TimeSpan.Zero)
+			memDuration = TimeSpan.Zero;
+		var memOptions = options.Duplicate();
+		memOptions.Duration = memDuration;
+		memOptions.IsFailSafeEnabled = false;
+		if (_mca.ShouldWrite(memOptions))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, memOptions);
+		}
+		var dca = DistributedCacheAccessor;
+		if (dca is not null && dca.ShouldWrite(options) && dca.CanBeUsed(operationId, key))
+		{
+			var baseDuration = options.DistributedCacheDuration ?? options.Duration;
+			var distAbsExp = now.Add(options.SlidingExpiration.Value);
+			if (baseDuration != TimeSpan.MaxValue)
+			{
+				var distAbsLimit = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(baseDuration);
+				if (distAbsExp > distAbsLimit)
+					distAbsExp = distAbsLimit;
+			}
+			var distDuration = distAbsExp - now;
+			if (distDuration < TimeSpan.Zero)
+				distDuration = TimeSpan.Zero;
+			var distOptions = options.Duplicate();
+			distOptions.DistributedCacheDuration = distDuration;
+			distOptions.IsFailSafeEnabled = false;
+			await dca.SetEntryAsync<TValue>(operationId, key, entry, distOptions, false, default).ConfigureAwait(false);
 		}
 	}
 
