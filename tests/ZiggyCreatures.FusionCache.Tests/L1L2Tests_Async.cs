@@ -116,8 +116,8 @@ public partial class L1L2Tests
 
 	[Theory]
 	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task DistributedCacheCircuitBreakerActuallyWorksAsync(SerializerType serializerType)
-	{
+        public async Task DistributedCacheCircuitBreakerActuallyWorksAsync(SerializerType serializerType)
+        {
 		var keyFoo = CreateRandomCacheKey("foo");
 
 		var circuitBreakerDuration = TimeSpan.FromSeconds(2);
@@ -141,8 +141,76 @@ public partial class L1L2Tests
 		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
 		var res = await fusionCache.GetOrDefaultAsync<int>(keyFoo, -1);
 
-		Assert.Equal(1, res);
-	}
+                Assert.Equal(1, res);
+        }
+
+        [Fact]
+        public async Task DistributedCacheAdvancedCircuitBreakerWorksAsync()
+        {
+                var keyFoo = CreateRandomCacheKey("foo");
+
+                var circuitBreakerDuration = TimeSpan.FromMilliseconds(500);
+                var distributedCache = new CountingDistributedCache(new MemoryDistributedCache(new MemoryDistributedCacheOptions()));
+                var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
+
+                using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+                var options = CreateFusionCacheOptions();
+                options.EnableAutoRecovery = false;
+                options.DistributedCacheCircuitBreakerDuration = circuitBreakerDuration;
+                options.DistributedCacheCircuitBreakerFailureThreshold = 0.5;
+                options.DistributedCacheCircuitBreakerSamplingDuration = TimeSpan.FromSeconds(1);
+                options.DistributedCacheCircuitBreakerMinimumThroughput = 2;
+                using var fusionCache = new FusionCache(options, memoryCache);
+                fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+                fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(SerializerType.SystemTextJson));
+
+                await fusionCache.SetAsync<int>(keyFoo, 1, o => o.SetDurationSec(60).SetFailSafe(true));
+                chaosDistributedCache.SetAlwaysThrow();
+                await fusionCache.SetAsync<int>(keyFoo, 2, o => o.SetDurationSec(60).SetFailSafe(true));
+                chaosDistributedCache.SetNeverThrow();
+                await Task.Delay(circuitBreakerDuration.PlusALittleBit());
+                memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
+                var res1 = await fusionCache.GetOrDefaultAsync<int>(keyFoo, -1);
+                var res2 = await fusionCache.GetOrDefaultAsync<int>(keyFoo, -1);
+
+                Assert.Equal(1, res1);
+                Assert.Equal(1, res2);
+                Assert.Equal(1, distributedCache.GetCalls);
+        }
+
+        [Fact]
+        public async Task DistributedCacheAdvancedCircuitBreakerAllowsSingleTestCallAsync()
+        {
+                var keyFoo = CreateRandomCacheKey("foo");
+
+                var circuitBreakerDuration = TimeSpan.FromMilliseconds(500);
+                var distributedCache = new CountingDistributedCache(new MemoryDistributedCache(new MemoryDistributedCacheOptions()));
+                var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
+
+                using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+                var options = CreateFusionCacheOptions();
+                options.EnableAutoRecovery = false;
+                options.DistributedCacheCircuitBreakerDuration = circuitBreakerDuration;
+                options.DistributedCacheCircuitBreakerFailureThreshold = 0.5;
+                options.DistributedCacheCircuitBreakerSamplingDuration = TimeSpan.FromSeconds(1);
+                options.DistributedCacheCircuitBreakerMinimumThroughput = 2;
+                using var fusionCache = new FusionCache(options, memoryCache);
+                fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+                fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(SerializerType.SystemTextJson));
+
+                await fusionCache.SetAsync<int>(keyFoo, 1, o => o.SetDurationSec(60).SetFailSafe(true));
+                chaosDistributedCache.SetAlwaysThrow();
+                await fusionCache.SetAsync<int>(keyFoo, 2, o => o.SetDurationSec(60).SetFailSafe(true));
+                chaosDistributedCache.SetNeverThrow();
+                await Task.Delay(circuitBreakerDuration.PlusALittleBit());
+                memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
+
+                var t1 = fusionCache.GetOrDefaultAsync<int>(keyFoo, -1);
+                var t2 = fusionCache.GetOrDefaultAsync<int>(keyFoo, -1);
+                await Task.WhenAll(t1, t2);
+
+                Assert.Equal(1, distributedCache.GetCalls);
+        }
 
 	private async Task _DistributedCacheWireVersionModifierWorksAsync(SerializerType serializerType, CacheKeyModifierMode modifierMode)
 	{

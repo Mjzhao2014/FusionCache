@@ -30,7 +30,12 @@ internal sealed partial class BackplaneAccessor
 		_events = _cache.Events.Backplane;
 
 		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerDuration);
+                _breaker = new SimpleCircuitBreaker(
+                        options.BackplaneCircuitBreakerDuration,
+                        options.BackplaneCircuitBreakerFailureThreshold,
+                        options.BackplaneCircuitBreakerSamplingDuration,
+                        options.BackplaneCircuitBreakerMinimumThroughput
+                );
 	}
 
 	public IFusionCacheBackplane Backplane

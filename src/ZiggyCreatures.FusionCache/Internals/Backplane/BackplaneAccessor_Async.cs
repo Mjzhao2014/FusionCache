@@ -111,16 +111,25 @@ internal partial class BackplaneAccessor
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
 
-			await _backplane.PublishAsync(message, options, token).ConfigureAwait(false);
+                        await _backplane.PublishAsync(message, options, token).ConfigureAwait(false);
 
-			// EVENT
-			_events.OnMessagePublished(operationId, message);
+                        // EVENT
+                        _events.OnMessagePublished(operationId, message);
 
-			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
-				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
-		}
-		catch (Exception exc)
-		{
+                        if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+                                _logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
+
+                        _breaker.OnSuccess(out var changed);
+                        if (changed)
+                        {
+                                if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+                                        _logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _options.CacheName, _options.InstanceId, operationId, cacheKey);
+
+                                _events.OnCircuitBreakerChange(operationId, cacheKey, true);
+                        }
+                }
+                catch (Exception exc)
+                {
 			ProcessError(operationId, cacheKey, exc, actionDescription);
 
 			// ACTIVITY

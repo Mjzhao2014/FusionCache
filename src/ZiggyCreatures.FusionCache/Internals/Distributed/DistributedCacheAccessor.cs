@@ -33,7 +33,12 @@ internal sealed partial class DistributedCacheAccessor
 		_events = events;
 
 		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerDuration);
+                _breaker = new SimpleCircuitBreaker(
+                        options.DistributedCacheCircuitBreakerDuration,
+                        options.DistributedCacheCircuitBreakerFailureThreshold,
+                        options.DistributedCacheCircuitBreakerSamplingDuration,
+                        options.DistributedCacheCircuitBreakerMinimumThroughput
+                );
 
 		// WIRE FORMAT SETUP
 		_wireFormatToken = _options.DistributedCacheKeyModifierMode == CacheKeyModifierMode.Prefix
