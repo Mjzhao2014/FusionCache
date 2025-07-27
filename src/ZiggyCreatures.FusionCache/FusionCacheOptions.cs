@@ -220,7 +220,11 @@ public class FusionCacheOptions
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
 	/// </summary>
-	public TimeSpan DistributedCacheCircuitBreakerDuration { get; set; }
+        public TimeSpan DistributedCacheCircuitBreakerDuration { get; set; }
+
+        public bool DistributedCacheUseAdvancedCircuitBreaker { get; set; }
+        public double DistributedCacheCircuitBreakerFailureThreshold { get; set; } = 0.5;
+        public TimeSpan DistributedCacheCircuitBreakerSamplingDuration { get; set; } = TimeSpan.FromSeconds(30);
 
 	/// <summary>
 	/// Execute event handlers in a sync fashion, waiting for all of them to complete before moving on.
@@ -252,7 +256,10 @@ public class FusionCacheOptions
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Backplane.md"/>
 	/// </summary>
-	public TimeSpan BackplaneCircuitBreakerDuration { get; set; }
+        public TimeSpan BackplaneCircuitBreakerDuration { get; set; }
+        public bool BackplaneUseAdvancedCircuitBreaker { get; set; }
+        public double BackplaneCircuitBreakerFailureThreshold { get; set; } = 0.5;
+        public TimeSpan BackplaneCircuitBreakerSamplingDuration { get; set; } = TimeSpan.FromSeconds(30);
 
 	/// <summary>
 	/// The prefix to use in the backplane channel name: if not specified the <see cref="CacheName"/> will be used.
@@ -586,13 +593,19 @@ public class FusionCacheOptions
 			AutoRecoveryMaxItems = AutoRecoveryMaxItems,
 			AutoRecoveryMaxRetryCount = AutoRecoveryMaxRetryCount,
 
-			BackplaneChannelPrefix = BackplaneChannelPrefix,
-			IgnoreIncomingBackplaneNotifications = IgnoreIncomingBackplaneNotifications,
-			BackplaneCircuitBreakerDuration = BackplaneCircuitBreakerDuration,
-			WaitForInitialBackplaneSubscribe = WaitForInitialBackplaneSubscribe,
+                        BackplaneChannelPrefix = BackplaneChannelPrefix,
+                        IgnoreIncomingBackplaneNotifications = IgnoreIncomingBackplaneNotifications,
+                        BackplaneCircuitBreakerDuration = BackplaneCircuitBreakerDuration,
+                        BackplaneUseAdvancedCircuitBreaker = BackplaneUseAdvancedCircuitBreaker,
+                        BackplaneCircuitBreakerFailureThreshold = BackplaneCircuitBreakerFailureThreshold,
+                        BackplaneCircuitBreakerSamplingDuration = BackplaneCircuitBreakerSamplingDuration,
+                        WaitForInitialBackplaneSubscribe = WaitForInitialBackplaneSubscribe,
 
-			DistributedCacheKeyModifierMode = DistributedCacheKeyModifierMode,
-			DistributedCacheCircuitBreakerDuration = DistributedCacheCircuitBreakerDuration,
+                        DistributedCacheKeyModifierMode = DistributedCacheKeyModifierMode,
+                        DistributedCacheCircuitBreakerDuration = DistributedCacheCircuitBreakerDuration,
+                        DistributedCacheUseAdvancedCircuitBreaker = DistributedCacheUseAdvancedCircuitBreaker,
+                        DistributedCacheCircuitBreakerFailureThreshold = DistributedCacheCircuitBreakerFailureThreshold,
+                        DistributedCacheCircuitBreakerSamplingDuration = DistributedCacheCircuitBreakerSamplingDuration,
 
 			EnableSyncEventHandlersExecution = EnableSyncEventHandlersExecution,
 

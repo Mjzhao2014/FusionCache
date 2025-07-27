@@ -44,8 +44,9 @@ internal partial class DistributedCacheAccessor
 			return false;
 		}
 
-		return true;
-	}
+                _breaker.Close(out _);
+                return true;
+        }
 
 	public async ValueTask<bool> SetEntryAsync<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, bool isBackground, CancellationToken token)
 	{
@@ -155,16 +156,17 @@ internal partial class DistributedCacheAccessor
 
 		// GET FROM DISTRIBUTED CACHE
 		byte[]? data;
-		try
-		{
-			timeout ??= options.GetAppropriateDistributedCacheTimeout(hasFallbackValue);
-			data = await RunUtils.RunAsyncFuncWithTimeoutAsync<byte[]?>(
-				async ct => await _cache.GetAsync(MaybeProcessCacheKey(key), ct).ConfigureAwait(false),
-				timeout.Value,
-				true,
-				token: token
-			).ConfigureAwait(false);
-		}
+                try
+                {
+                        timeout ??= options.GetAppropriateDistributedCacheTimeout(hasFallbackValue);
+                        data = await RunUtils.RunAsyncFuncWithTimeoutAsync<byte[]?>(
+                                async ct => await _cache.GetAsync(MaybeProcessCacheKey(key), ct).ConfigureAwait(false),
+                                timeout.Value,
+                                true,
+                                token: token
+                        ).ConfigureAwait(false);
+                        _breaker.Close(out _);
+                }
 		catch (Exception exc)
 		{
 			ProcessError(operationId, key, exc, "getting entry from distributed");

@@ -122,7 +122,8 @@ internal partial class BackplaneAccessor
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
 
-			await _backplane.PublishAsync(message, options, token).ConfigureAwait(false);
+                        await _backplane.PublishAsync(message, options, token).ConfigureAwait(false);
+                        _breaker.Close(out _);
 
 			// EVENT
 			_events.OnMessagePublished(operationId, message);

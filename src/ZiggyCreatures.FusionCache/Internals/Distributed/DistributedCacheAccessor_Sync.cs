@@ -44,8 +44,9 @@ internal partial class DistributedCacheAccessor
 			return false;
 		}
 
-		return true;
-	}
+                _breaker.Close(out _);
+                return true;
+        }
 
 	public bool SetEntry<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, bool isBackground, CancellationToken token)
 	{
@@ -151,13 +152,14 @@ internal partial class DistributedCacheAccessor
 		try
 		{
 			timeout ??= options.GetAppropriateDistributedCacheTimeout(hasFallbackValue);
-			data = RunUtils.RunSyncFuncWithTimeout<byte[]?>(
-				_ => _cache.Get(MaybeProcessCacheKey(key)),
-				timeout.Value,
-				true,
-				token: token
-			);
-		}
+                        data = RunUtils.RunSyncFuncWithTimeout<byte[]?>(
+                                _ => _cache.Get(MaybeProcessCacheKey(key)),
+                                timeout.Value,
+                                true,
+                                token: token
+                        );
+                        _breaker.Close(out _);
+                }
 		catch (Exception exc)
 		{
 			ProcessError(operationId, key, exc, "getting entry from distributed");
