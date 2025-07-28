@@ -20,6 +20,9 @@ internal partial class DistributedCacheAccessor
 
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
+
+			// RECORD SUCCESS FOR CIRCUIT BREAKER
+			RecordSuccess(operationId, key);
 		}
 		catch (Exception exc)
 		{

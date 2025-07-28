@@ -3,7 +3,7 @@
 /// <summary>
 /// A simple, reusable circuit-breaker.
 /// </summary>
-internal sealed class SimpleCircuitBreaker
+internal sealed class SimpleCircuitBreaker : IFusionCacheCircuitBreaker
 {
 	private const int CircuitStateClosed = 0;
 	private const int CircuitStateOpen = 1;
@@ -27,6 +27,12 @@ internal sealed class SimpleCircuitBreaker
 	/// The amount of time the circuit will remain open, when told to.
 	/// </summary>
 	public TimeSpan BreakDuration { get; private set; }
+
+	/// <inheritdoc/>
+	public CircuitBreakerState State => _circuitState == CircuitStateClosed ? CircuitBreakerState.Closed : CircuitBreakerState.Open;
+
+	/// <inheritdoc/>
+	public int CurrentFailureCount => _circuitState == CircuitStateOpen ? 1 : 0;
 
 	/// <summary>
 	/// Tries to open the circuit.
@@ -91,5 +97,23 @@ internal sealed class SimpleCircuitBreaker
 		}
 
 		return true;
+	}
+
+	/// <inheritdoc/>
+	public bool TryExecute(out bool isStateChanged)
+	{
+		return IsClosed(out isStateChanged);
+	}
+
+	/// <inheritdoc/>
+	public void RecordSuccess(out bool isStateChanged)
+	{
+		Close(out isStateChanged);
+	}
+
+	/// <inheritdoc/>
+	public void RecordFailure(out bool isStateChanged)
+	{
+		TryOpen(out isStateChanged);
 	}
 }

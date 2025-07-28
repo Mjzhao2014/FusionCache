@@ -195,6 +195,43 @@ public class FusionCacheOptions
 	public TimeSpan DistributedCacheCircuitBreakerDuration { get; set; }
 
 	/// <summary>
+	/// Enables the advanced circuit breaker for distributed cache operations with sophisticated failure detection and recovery logic.
+	/// When enabled, provides half-open state, failure counting within sampling windows, and configurable thresholds.
+	/// Defaults to <see langword="false"/>, which uses the simple circuit breaker.
+	/// <br/><br/>
+	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
+	/// </summary>
+	public bool EnableAdvancedDistributedCacheCircuitBreaker { get; set; }
+
+	/// <summary>
+	/// The number of failures within the sampling duration that will cause the advanced circuit breaker to open.
+	/// Only used when <see cref="EnableAdvancedDistributedCacheCircuitBreaker"/> is <see langword="true"/>.
+	/// Defaults to 5.
+	/// <br/><br/>
+	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
+	/// </summary>
+	public int DistributedCacheCircuitBreakerFailureThreshold { get; set; } = 5;
+
+	/// <summary>
+	/// The time window for counting failures in the advanced circuit breaker. Failures older than this duration are ignored.
+	/// Only used when <see cref="EnableAdvancedDistributedCacheCircuitBreaker"/> is <see langword="true"/>.
+	/// Defaults to 1 minute.
+	/// <br/><br/>
+	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
+	/// </summary>
+	public TimeSpan DistributedCacheCircuitBreakerSamplingDuration { get; set; } = TimeSpan.FromMinutes(1);
+
+	/// <summary>
+	/// The maximum number of calls allowed when the advanced circuit breaker is in half-open state.
+	/// If all calls succeed, the circuit closes. If any call fails, the circuit opens again.
+	/// Only used when <see cref="EnableAdvancedDistributedCacheCircuitBreaker"/> is <see langword="true"/>.
+	/// Defaults to 3.
+	/// <br/><br/>
+	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
+	/// </summary>
+	public int DistributedCacheCircuitBreakerHalfOpenMaxCalls { get; set; } = 3;
+
+	/// <summary>
 	/// Execute event handlers in a sync fashion, waiting for all of them to complete before moving on.
 	/// <br/><br/>
 	/// <strong>WARNING:</strong> by default this option is NOT enabled, and should remain this way in any normal circumstance unless you really know what you are doing.
@@ -562,6 +599,10 @@ public class FusionCacheOptions
 
 			DistributedCacheKeyModifierMode = DistributedCacheKeyModifierMode,
 			DistributedCacheCircuitBreakerDuration = DistributedCacheCircuitBreakerDuration,
+			EnableAdvancedDistributedCacheCircuitBreaker = EnableAdvancedDistributedCacheCircuitBreaker,
+			DistributedCacheCircuitBreakerFailureThreshold = DistributedCacheCircuitBreakerFailureThreshold,
+			DistributedCacheCircuitBreakerSamplingDuration = DistributedCacheCircuitBreakerSamplingDuration,
+			DistributedCacheCircuitBreakerHalfOpenMaxCalls = DistributedCacheCircuitBreakerHalfOpenMaxCalls,
 
 			EnableSyncEventHandlersExecution = EnableSyncEventHandlersExecution,
 
