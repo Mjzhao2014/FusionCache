@@ -137,7 +137,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			FailureThreshold = 2,
 			SamplingDuration = TimeSpan.FromMinutes(1),
 			DurationOfBreak = TimeSpan.FromMilliseconds(100),
-			HalfOpenMaxCalls = 2
+			MinimumThroughput = 2
 		};
 
 		var breaker = new AdvancedCircuitBreaker(options);
@@ -163,7 +163,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			FailureThreshold = 2,
 			SamplingDuration = TimeSpan.FromMinutes(1),
 			DurationOfBreak = TimeSpan.FromMilliseconds(100),
-			HalfOpenMaxCalls = 2
+			MinimumThroughput = 2
 		};
 
 		var breaker = new AdvancedCircuitBreaker(options);
@@ -197,7 +197,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			FailureThreshold = 2,
 			SamplingDuration = TimeSpan.FromMinutes(1),
 			DurationOfBreak = TimeSpan.FromMilliseconds(100),
-			HalfOpenMaxCalls = 3
+			MinimumThroughput = 3
 		};
 
 		var breaker = new AdvancedCircuitBreaker(options);
@@ -297,7 +297,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			DistributedCacheCircuitBreakerDuration = TimeSpan.FromSeconds(5),
 			DistributedCacheCircuitBreakerFailureThreshold = 3,
 			DistributedCacheCircuitBreakerSamplingDuration = TimeSpan.FromMinutes(1),
-			DistributedCacheCircuitBreakerHalfOpenMaxCalls = 2
+			DistributedCacheCircuitBreakerMinimumThroughput = 2
 		}, memoryCache);
 
 		cache.SetupDistributedCache(distributedCache);
@@ -328,7 +328,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			DistributedCacheCircuitBreakerDuration = TimeSpan.FromSeconds(30),
 			DistributedCacheCircuitBreakerFailureThreshold = 5,
 			DistributedCacheCircuitBreakerSamplingDuration = TimeSpan.FromMinutes(2),
-			DistributedCacheCircuitBreakerHalfOpenMaxCalls = 3
+			DistributedCacheCircuitBreakerMinimumThroughput = 3
 		};
 
 		var breaker = CircuitBreakerFactory.CreateDistributedCacheCircuitBreaker(options);
@@ -348,7 +348,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			DistributedCacheCircuitBreakerDuration = TimeSpan.FromMilliseconds(100),
 			DistributedCacheCircuitBreakerFailureThreshold = 2,
 			DistributedCacheCircuitBreakerSamplingDuration = TimeSpan.FromMinutes(1),
-			DistributedCacheCircuitBreakerHalfOpenMaxCalls = 1
+			DistributedCacheCircuitBreakerMinimumThroughput = 1
 		}, memoryCache);
 
 		cache.SetupDistributedCache(distributedCache);

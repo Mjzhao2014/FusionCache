@@ -19,7 +19,7 @@ internal static class CircuitBreakerFactory
 				FailureThreshold = options.DistributedCacheCircuitBreakerFailureThreshold,
 				SamplingDuration = options.DistributedCacheCircuitBreakerSamplingDuration,
 				DurationOfBreak = options.DistributedCacheCircuitBreakerDuration,
-				HalfOpenMaxCalls = options.DistributedCacheCircuitBreakerHalfOpenMaxCalls
+				MinimumThroughput = options.DistributedCacheCircuitBreakerMinimumThroughput
 			};
 			
 			return new AdvancedCircuitBreaker(advancedOptions);

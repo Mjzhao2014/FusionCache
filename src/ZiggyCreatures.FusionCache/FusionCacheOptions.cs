@@ -229,7 +229,7 @@ public class FusionCacheOptions
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
 	/// </summary>
-	public int DistributedCacheCircuitBreakerHalfOpenMaxCalls { get; set; } = 3;
+	public int DistributedCacheCircuitBreakerMinimumThroughput { get; set; } = 3;
 
 	/// <summary>
 	/// Execute event handlers in a sync fashion, waiting for all of them to complete before moving on.
@@ -602,7 +602,7 @@ public class FusionCacheOptions
 			EnableAdvancedDistributedCacheCircuitBreaker = EnableAdvancedDistributedCacheCircuitBreaker,
 			DistributedCacheCircuitBreakerFailureThreshold = DistributedCacheCircuitBreakerFailureThreshold,
 			DistributedCacheCircuitBreakerSamplingDuration = DistributedCacheCircuitBreakerSamplingDuration,
-			DistributedCacheCircuitBreakerHalfOpenMaxCalls = DistributedCacheCircuitBreakerHalfOpenMaxCalls,
+			DistributedCacheCircuitBreakerMinimumThroughput = DistributedCacheCircuitBreakerMinimumThroughput,
 
 			EnableSyncEventHandlersExecution = EnableSyncEventHandlersExecution,
 

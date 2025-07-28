@@ -13,7 +13,6 @@ internal sealed class AdvancedCircuitBreakerOptions
 		FailureThreshold = 5;
 		SamplingDuration = TimeSpan.FromMinutes(1);
 		DurationOfBreak = TimeSpan.FromSeconds(30);
-		HalfOpenMaxCalls = 3;
 	}
 
 	/// <summary>
@@ -35,12 +34,10 @@ internal sealed class AdvancedCircuitBreakerOptions
 	public TimeSpan DurationOfBreak { get; set; }
 
 	/// <summary>
-	/// The maximum number of calls allowed when the circuit is in half-open state.
-	/// If all calls succeed, the circuit closes. If any call fails, the circuit opens again.
-	/// Default is 3.
+	/// The minimum number of calls that must occur during the sampling window 
+	/// before it evaluates whether the failure rate is too high.
 	/// </summary>
-	public int HalfOpenMaxCalls { get; set; }
-
+	public int MinimumThroughput { get; set; } = 10;
 	/// <summary>
 	/// Creates a copy of the current options.
 	/// </summary>
@@ -52,7 +49,7 @@ internal sealed class AdvancedCircuitBreakerOptions
 			FailureThreshold = FailureThreshold,
 			SamplingDuration = SamplingDuration,
 			DurationOfBreak = DurationOfBreak,
-			HalfOpenMaxCalls = HalfOpenMaxCalls
+			MinimumThroughput = MinimumThroughput
 		};
 	}
 }

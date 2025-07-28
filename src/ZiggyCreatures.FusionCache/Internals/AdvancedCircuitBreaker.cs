@@ -75,7 +75,7 @@ internal sealed class AdvancedCircuitBreaker : IFusionCacheCircuitBreaker
 				{
 					if (_state == StateHalfOpen)
 					{
-						if (_halfOpenCallCount < _options.HalfOpenMaxCalls)
+						if (_halfOpenCallCount < 1)
 						{
 							_halfOpenCallCount++;
 							return true;
@@ -101,7 +101,7 @@ internal sealed class AdvancedCircuitBreaker : IFusionCacheCircuitBreaker
 			{
 				if (_state == StateHalfOpen)
 				{
-					if (_halfOpenCallCount >= _options.HalfOpenMaxCalls)
+					if (_halfOpenCallCount >= 1)
 					{
 						_state = StateClosed;
 						_halfOpenCallCount = 0;
