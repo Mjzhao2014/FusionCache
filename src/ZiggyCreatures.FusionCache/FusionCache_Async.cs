@@ -85,6 +85,9 @@ public partial class FusionCache
 	{
 		options ??= _defaultEntryOptions;
 
+		// effective options used when storing back into caches
+		var effectiveMemOptions = options;
+
 		IFusionCacheMemoryEntry? memoryEntry = null;
 		bool memoryEntryIsValid = false;
 		object? memoryLockObj = null;
@@ -104,6 +107,32 @@ public partial class FusionCache
 		if (memoryEntryIsValid)
 		{
 			// VALID CACHE ENTRY
+			// SLIDING EXPIRATION
+			if (options.SlidingExpiration.HasValue && memoryEntry!.IsStale() == false)
+			{
+				var memDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(options.Duration, options.SlidingExpiration, memoryEntry.Timestamp);
+				var memOptions = options.Duplicate(memDuration);
+				effectiveMemOptions = memOptions;
+				memOptions.SlidingExpiration = options.SlidingExpiration;
+				var newEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(memoryEntry.GetValue<TValue>(), memoryEntry.Timestamp, memoryEntry.Tags, memOptions, false, memoryEntry.Metadata?.LastModifiedTimestamp, memoryEntry.Metadata?.ETag);
+				if (_mca.ShouldWrite(memOptions))
+				{
+					_mca.SetEntry<TValue>(operationId, key, newEntry, memOptions);
+				}
+				if (RequiresDistributedOperations(options))
+				{
+					var distAbs = options.DistributedCacheDuration ?? options.Duration;
+					var distDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(distAbs, options.SlidingExpiration, memoryEntry.Timestamp);
+					var distOptions = options.Duplicate();
+					distOptions.SlidingExpiration = options.SlidingExpiration;
+					if (options.DistributedCacheDuration.HasValue)
+						distOptions.DistributedCacheDuration = distDuration;
+					else
+						distOptions.Duration = distDuration;
+					await DistributedSetEntryAsync<TValue>(operationId, key, newEntry, distOptions, CancellationToken.None).ConfigureAwait(false);
+				}
+				memoryEntry = newEntry;
+			}
 
 			// CHECK FOR EAGER REFRESH
 			if (isRealFactory && memoryEntry.ShouldEagerlyRefresh())
@@ -209,7 +238,30 @@ public partial class FusionCache
 			if (distributedEntryIsValid)
 			{
 				isStale = false;
-				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				if (options.SlidingExpiration.HasValue)
+				{
+					var memDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(options.Duration, options.SlidingExpiration, distributedEntry.Timestamp);
+					var memOptions = options.Duplicate(memDuration);
+					memOptions.SlidingExpiration = options.SlidingExpiration;
+					effectiveMemOptions = memOptions;
+					entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(distributedEntry.Value, distributedEntry.Timestamp, distributedEntry.Tags, memOptions, false, distributedEntry.Metadata?.LastModifiedTimestamp, distributedEntry.Metadata?.ETag);
+					if (RequiresDistributedOperations(options))
+					{
+						var distAbs = options.DistributedCacheDuration ?? options.Duration;
+						var distDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(distAbs, options.SlidingExpiration, distributedEntry.Timestamp);
+						var distOptions = options.Duplicate();
+						distOptions.SlidingExpiration = options.SlidingExpiration;
+						if (options.DistributedCacheDuration.HasValue)
+							distOptions.DistributedCacheDuration = distDuration;
+						else
+							distOptions.Duration = distDuration;
+						await DistributedSetEntryAsync<TValue>(operationId, key, entry, distOptions, token).ConfigureAwait(false);
+					}
+				}
+				else
+				{
+					entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				}
 			}
 			else
 			{
@@ -219,7 +271,16 @@ public partial class FusionCache
 					var value = await factory(null!, token).ConfigureAwait(false);
 					hasNewValue = true;
 
-					entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tags, options, isStale, null, null);
+					// if sliding and duration is infinite, treat initial TTL as sliding window
+					FusionCacheEntryOptions creationOptions = options;
+					if (options.SlidingExpiration.HasValue && options.Duration == TimeSpan.MaxValue)
+					{
+						var initDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(options.Duration, options.SlidingExpiration, FusionCacheInternalUtils.GetCurrentTimestamp());
+						creationOptions = options.Duplicate(initDuration);
+						creationOptions.SlidingExpiration = options.SlidingExpiration;
+						effectiveMemOptions = creationOptions;
+					}
+					entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tags, creationOptions, isStale, null, null);
 				}
 				else
 				{
@@ -320,9 +381,9 @@ public partial class FusionCache
 			// SAVING THE DATA IN THE MEMORY CACHE
 			if (entry is not null)
 			{
-				if (_mca.ShouldWrite(options))
+				if (_mca.ShouldWrite(effectiveMemOptions))
 				{
-					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					_mca.SetEntry<TValue>(operationId, key, entry, effectiveMemOptions, ReferenceEquals(memoryEntry, entry));
 				}
 			}
 		}
@@ -340,7 +401,19 @@ public partial class FusionCache
 			{
 				if (RequiresDistributedOperations(options))
 				{
-					await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+					FusionCacheEntryOptions distOptions = options;
+					if (options.SlidingExpiration.HasValue && (options.DistributedCacheDuration ?? options.Duration) == TimeSpan.MaxValue)
+					{
+						var distAbs = options.DistributedCacheDuration ?? options.Duration;
+						var distDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(distAbs, options.SlidingExpiration, FusionCacheInternalUtils.GetCurrentTimestamp());
+						distOptions = options.Duplicate();
+						distOptions.SlidingExpiration = options.SlidingExpiration;
+						if (options.DistributedCacheDuration.HasValue)
+							distOptions.DistributedCacheDuration = distDuration;
+						else
+							distOptions.Duration = distDuration;
+					}
+					await DistributedSetEntryAsync<TValue>(operationId, key, entry, distOptions, token).ConfigureAwait(false);
 				}
 			}
 
@@ -488,6 +561,32 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
 
+			// SLIDING EXPIRATION
+			if (options.SlidingExpiration.HasValue && memoryEntry.IsStale() == false)
+			{
+				var memDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(options.Duration, options.SlidingExpiration, memoryEntry.Timestamp);
+				var memOptions = options.Duplicate(memDuration);
+				memOptions.SlidingExpiration = options.SlidingExpiration;
+				var refreshed = FusionCacheMemoryEntry<TValue>.CreateFromOptions(memoryEntry.GetValue<TValue>(), memoryEntry.Timestamp, memoryEntry.Tags, memOptions, false, memoryEntry.Metadata?.LastModifiedTimestamp, memoryEntry.Metadata?.ETag);
+				if (_mca.ShouldWrite(memOptions))
+				{
+					_mca.SetEntry<TValue>(operationId, key, refreshed, memOptions);
+				}
+				if (RequiresDistributedOperations(options))
+				{
+					var distAbs = options.DistributedCacheDuration ?? options.Duration;
+					var distDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(distAbs, options.SlidingExpiration, memoryEntry.Timestamp);
+					var distOptions = options.Duplicate();
+					distOptions.SlidingExpiration = options.SlidingExpiration;
+					if (options.DistributedCacheDuration.HasValue)
+						distOptions.DistributedCacheDuration = distDuration;
+					else
+						distOptions.Duration = distDuration;
+					await DistributedSetEntryAsync<TValue>(operationId, key, refreshed, distOptions, CancellationToken.None).ConfigureAwait(false);
+				}
+				memoryEntry = refreshed;
+			}
+
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 
@@ -533,12 +632,38 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
 
-			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (_mca.ShouldWrite(options))
+			if (options.SlidingExpiration.HasValue)
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				var memDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(options.Duration, options.SlidingExpiration, distributedEntry.Timestamp);
+				var memOptions = options.Duplicate(memDuration);
+				memOptions.SlidingExpiration = options.SlidingExpiration;
+				memoryEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(distributedEntry.Value, distributedEntry.Timestamp, distributedEntry.Tags, memOptions, false, distributedEntry.Metadata?.LastModifiedTimestamp, distributedEntry.Metadata?.ETag);
+				if (_mca.ShouldWrite(memOptions))
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, memOptions);
+				}
+				if (RequiresDistributedOperations(options))
+				{
+					var distAbs = options.DistributedCacheDuration ?? options.Duration;
+					var distDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(distAbs, options.SlidingExpiration, distributedEntry.Timestamp);
+					var distOptions = options.Duplicate();
+					distOptions.SlidingExpiration = options.SlidingExpiration;
+					if (options.DistributedCacheDuration.HasValue)
+						distOptions.DistributedCacheDuration = distDuration;
+					else
+						distOptions.Duration = distDuration;
+					await DistributedSetEntryAsync<TValue>(operationId, key, memoryEntry, distOptions, CancellationToken.None).ConfigureAwait(false);
+				}
+			}
+			else
+			{
+				memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
+
+				// SAVING THE DATA IN THE MEMORY CACHE
+				if (_mca.ShouldWrite(options))
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				}
 			}
 
 			// EVENT
@@ -710,16 +835,34 @@ public partial class FusionCache
 		try
 		{
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
-			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
-
-			if (_mca.ShouldWrite(options))
+			// adjust initial TTL for sliding+infinite duration scenario
+			FusionCacheEntryOptions setOptions = options;
+			if (options.SlidingExpiration.HasValue && options.Duration == TimeSpan.MaxValue)
 			{
-				_mca.SetEntry<TValue>(operationId, key, entry, options);
+				var initDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(options.Duration, options.SlidingExpiration, FusionCacheInternalUtils.GetCurrentTimestamp());
+				setOptions = options.Duplicate(initDuration);
+				setOptions.SlidingExpiration = options.SlidingExpiration;
 			}
-
-			if (RequiresDistributedOperations(options))
+			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, setOptions, false, null, null);
+			if (_mca.ShouldWrite(setOptions))
 			{
-				await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+				_mca.SetEntry<TValue>(operationId, key, entry, setOptions);
+			}
+			if (RequiresDistributedOperations(setOptions))
+			{
+				FusionCacheEntryOptions distOptions = setOptions;
+				if (options.SlidingExpiration.HasValue && (options.DistributedCacheDuration ?? options.Duration) == TimeSpan.MaxValue)
+				{
+					var distAbs = options.DistributedCacheDuration ?? options.Duration;
+					var distDuration = FusionCacheInternalUtils.ComputeNewSlidingDuration(distAbs, options.SlidingExpiration, FusionCacheInternalUtils.GetCurrentTimestamp());
+					distOptions = options.Duplicate();
+					distOptions.SlidingExpiration = options.SlidingExpiration;
+					if (options.DistributedCacheDuration.HasValue)
+						distOptions.DistributedCacheDuration = distDuration;
+					else
+						distOptions.Duration = distDuration;
+				}
+				await DistributedSetEntryAsync<TValue>(operationId, key, entry, distOptions, token).ConfigureAwait(false);
 			}
 
 			// EVENT

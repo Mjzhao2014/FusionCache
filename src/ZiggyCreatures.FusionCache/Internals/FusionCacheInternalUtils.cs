@@ -375,6 +375,32 @@ internal static class FusionCacheInternalUtils
 		return $"{prefix}.Backplane{FusionCacheOptions.BackplaneWireFormatSeparator}{FusionCacheOptions.BackplaneWireFormatVersion}";
 	}
 
+	/// <summary>
+	/// Computes an effective duration for a sliding expiration scenario given an absolute duration (from the options), an optional sliding expiration window and an existing entry timestamp.
+	/// If <paramref name="slidingExpiration"/> is not set, returns the absolute duration.
+	/// If <paramref name="slidingExpiration"/> is set and the absolute duration is <see cref="TimeSpan.MaxValue"/>, returns the sliding expiration.
+	/// Otherwise, returns the smaller between (now + sliding) and the original absolute expiration of the entry.
+	/// </summary>
+	/// <param name="absoluteDuration">The absolute duration configured on the options.</param>
+	/// <param name="slidingExpiration">The optional sliding expiration window.</param>
+	/// <param name="entryTimestampUtcTicks">The timestamp (in UTC ticks) of the entry.</param>
+	/// <returns>A duration to use for caching purposes to enforce sliding expiration semantics.</returns>
+	public static TimeSpan ComputeNewSlidingDuration(TimeSpan absoluteDuration, TimeSpan? slidingExpiration, long entryTimestampUtcTicks)
+	{
+		if (slidingExpiration.HasValue == false)
+			return absoluteDuration;
+		// if absolute duration is infinite, just use the sliding window for TTL
+		if (absoluteDuration == TimeSpan.MaxValue)
+			return slidingExpiration.Value;
+		var now = DateTimeOffset.UtcNow;
+		var absoluteExpiration = new DateTimeOffset(entryTimestampUtcTicks, TimeSpan.Zero).Add(absoluteDuration);
+		var slidingExpirationTime = now.Add(slidingExpiration.Value);
+		if (slidingExpirationTime <= absoluteExpiration)
+			return slidingExpiration.Value;
+		var capped = absoluteExpiration - now;
+		return capped > TimeSpan.Zero ? capped : TimeSpan.Zero;
+	}
+
 	public static long GetNormalizedAbsoluteExpirationTimestamp(TimeSpan duration, FusionCacheEntryOptions options, bool allowJittering, DateTimeOffset? startAt = null)
 	{
 		// EARLY RETURN: COMMON CASE FOR WHEN USERS DO NOT WANT EXPIRATION

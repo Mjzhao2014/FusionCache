@@ -25,6 +25,7 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions(TimeSpan? duration = null)
 	{
 		Duration = duration ?? FusionCacheGlobalDefaults.EntryOptionsDuration;
+		SlidingExpiration = null;
 		LockTimeout = FusionCacheGlobalDefaults.EntryOptionsLockTimeout;
 		JitterMaxDuration = FusionCacheGlobalDefaults.EntryOptionsJitterMaxDuration;
 		Size = FusionCacheGlobalDefaults.EntryOptionsSize;
@@ -74,6 +75,13 @@ public sealed class FusionCacheEntryOptions
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 	/// </summary>
 	public TimeSpan Duration { get; set; }
+
+	/// <summary>
+	/// Optional sliding expiration for the entry: when set, this defines a sliding expiration window
+	/// that will be used to extend the lifetime of the entry whenever it is accessed, up to the
+	/// absolute expiration dictated by <see cref="Duration"/>.
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; }
 
 	private float? _eagerRefreshThreshold = null;
 
@@ -606,6 +614,19 @@ public sealed class FusionCacheEntryOptions
 	}
 
 	/// <summary>
+	/// Set the <see cref="SlidingExpiration"/> to the specified <see cref="TimeSpan"/> value.
+	/// When set, on each access the expiration window will be moved forward by this amount,
+	/// up to the absolute expiration dictated by <see cref="Duration"/>.
+	/// </summary>
+	/// <param name="slidingExpiration">The sliding window duration.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan slidingExpiration)
+	{
+		SlidingExpiration = slidingExpiration;
+		return this;
+	}
+
+	/// <summary>
 	/// Set the <see cref="EagerRefreshThreshold"/>.
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/EagerRefresh.md
@@ -1091,6 +1112,7 @@ public sealed class FusionCacheEntryOptions
 			Size = Size,
 			Priority = Priority,
 			JitterMaxDuration = JitterMaxDuration,
+			SlidingExpiration = SlidingExpiration,
 
 			// NOTE: PERF MICRO-OPT
 			_eagerRefreshThreshold = _eagerRefreshThreshold,
