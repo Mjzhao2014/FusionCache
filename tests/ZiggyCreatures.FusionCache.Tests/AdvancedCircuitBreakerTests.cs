@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Xunit;
 using Xunit.Abstractions;
 using ZiggyCreatures.Caching.Fusion;
+using ZiggyCreatures.Caching.Fusion.Chaos;
 using ZiggyCreatures.Caching.Fusion.Internals;
 
 namespace FusionCacheTests;
@@ -18,7 +19,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_StartsInClosedState()
+	public void StartsInClosedState()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -34,7 +35,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_AllowsExecutionWhenClosed()
+	public void AllowsExecutionWhenClosed()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -53,7 +54,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_OpensAfterFailureThreshold()
+	public void OpensAfterFailureThreshold()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -80,7 +81,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_BlocksExecutionWhenOpen()
+	public void BlocksExecutionWhenOpen()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -103,7 +104,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_TransitionsToHalfOpenAfterDurationOfBreak()
+	public void TransitionsToHalfOpenAfterDurationOfBreak()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -130,7 +131,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_HalfOpenLimitsExecutions()
+	public void HalfOpenLimitsExecutions()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -156,7 +157,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_HalfOpenClosesOnAllSuccesses()
+	public void HalfOpenClosesOnAllSuccesses()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -171,26 +172,29 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 		// Open the circuit
 		breaker.RecordFailure(out _);
 		breaker.RecordFailure(out _);
-
+		Assert.Equal(CircuitBreakerState.Open, breaker.State);
 		// Wait for break duration
 		Thread.Sleep(150);
 
 		// Execute in half-open state
-		breaker.TryExecute(out _);
-		breaker.TryExecute(out _);
+		breaker.TryExecute(out var stateChanged1);
+		Assert.True(stateChanged1);
+		Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
 
 		// Record successes - should close circuit after max calls reached
-		breaker.RecordSuccess(out var stateChanged1);
-		Assert.False(stateChanged1);
-		
 		breaker.RecordSuccess(out var stateChanged2);
 		Assert.True(stateChanged2);
+		Assert.Equal(CircuitBreakerState.Closed, breaker.State);
+		Assert.Equal(0, breaker.CurrentFailureCount);
+		
+		breaker.RecordSuccess(out var stateChanged3);
+		Assert.False(stateChanged3);
 		Assert.Equal(CircuitBreakerState.Closed, breaker.State);
 		Assert.Equal(0, breaker.CurrentFailureCount);
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_HalfOpenOpensOnFailure()
+	public void HalfOpenOpensOnFailure()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -219,7 +223,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_ManualCloseWorks()
+	public void ManualCloseWorks()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -243,7 +247,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void AdvancedCircuitBreaker_ExpiredFailuresAreIgnored()
+	public void ExpiredFailuresAreIgnored()
 	{
 		var options = new AdvancedCircuitBreakerOptions
 		{
@@ -267,8 +271,9 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 		Assert.Equal(CircuitBreakerState.Closed, breaker.State);
 	}
 
-	[Fact]
-	public void FusionCache_UsesSimpleCircuitBreakerByDefault()
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public void UsesSimpleCircuitBreakerByDefault(SerializerType serializerType)
 	{
 		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
 		var memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
@@ -278,15 +283,16 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			DistributedCacheCircuitBreakerDuration = TimeSpan.FromSeconds(5)
 		}, memoryCache);
 
-		cache.SetupDistributedCache(distributedCache);
+		cache.SetupDistributedCache(distributedCache, TestsUtils.GetSerializer(serializerType));
 
 		// Should start with simple circuit breaker behavior
 		// We can't directly test the internal type, but we can verify basic functionality
 		Assert.NotNull(cache);
 	}
 
-	[Fact]
-	public void FusionCache_UsesAdvancedCircuitBreakerWhenEnabled()
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public void UsesAdvancedCircuitBreakerWhenEnabled(SerializerType serializerType)
 	{
 		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
 		var memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
@@ -300,14 +306,14 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			DistributedCacheCircuitBreakerMinimumThroughput = 2
 		}, memoryCache);
 
-		cache.SetupDistributedCache(distributedCache);
+		cache.SetupDistributedCache(distributedCache, TestsUtils.GetSerializer(serializerType));
 
 		// Should start with advanced circuit breaker
 		Assert.NotNull(cache);
 	}
 
 	[Fact]
-	public void CircuitBreakerFactory_CreatesSimpleCircuitBreakerByDefault()
+	public void CreatesSimpleCircuitBreakerByDefault()
 	{
 		var options = new FusionCacheOptions
 		{
@@ -320,7 +326,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 	}
 
 	[Fact]
-	public void CircuitBreakerFactory_CreatesAdvancedCircuitBreakerWhenEnabled()
+	public void CreatesAdvancedCircuitBreakerWhenEnabled()
 	{
 		var options = new FusionCacheOptions
 		{
@@ -336,11 +342,13 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 		Assert.IsType<AdvancedCircuitBreaker>(breaker);
 	}
 
-	[Fact]
-	public async Task FusionCache_AdvancedCircuitBreakerIntegrationTest()
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public async Task AdvancedCircuitBreakerIntegrationTest(SerializerType serializerType)
 	{
 		var memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
-		var distributedCache = new FailingDistributedCache();
+		var distributedCache = CreateDistributedCache();
+		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
 
 		using var cache = new FusionCache(new FusionCacheOptions
 		{
@@ -351,7 +359,9 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 			DistributedCacheCircuitBreakerMinimumThroughput = 1
 		}, memoryCache);
 
-		cache.SetupDistributedCache(distributedCache);
+		cache.SetupDistributedCache(chaosDistributedCache,TestsUtils.GetSerializer(serializerType));
+
+		chaosDistributedCache.SetAlwaysThrow();
 
 		// First operations should fail and open the circuit
 		await cache.SetAsync("key1", "value1");
@@ -365,7 +375,7 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 		await Task.Delay(150);
 
 		// Make distributed cache work again
-		distributedCache.ShouldFail = false;
+		chaosDistributedCache.SetNeverThrow();
 
 		// Next operation should succeed and close the circuit (half-open -> closed)
 		await cache.SetAsync("key4", "value4");
@@ -375,70 +385,9 @@ public class AdvancedCircuitBreakerTests : AbstractTests
 		Assert.Equal("value4", retrievedValue);
 	}
 
-	private class FailingDistributedCache : IDistributedCache
+	private static IDistributedCache CreateDistributedCache()
 	{
-		private readonly MemoryDistributedCache _inner;
-		public bool ShouldFail { get; set; } = true;
 
-		public FailingDistributedCache()
-		{
-			_inner = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-		}
-
-		public byte[]? Get(string key)
-		{
-			if (ShouldFail)
-				throw new InvalidOperationException("Simulated failure");
-			return _inner.Get(key);
-		}
-
-		public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
-		{
-			if (ShouldFail)
-				throw new InvalidOperationException("Simulated failure");
-			return _inner.GetAsync(key, token);
-		}
-
-		public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
-		{
-			if (ShouldFail)
-				throw new InvalidOperationException("Simulated failure");
-			_inner.Set(key, value, options);
-		}
-
-		public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default)
-		{
-			if (ShouldFail)
-				throw new InvalidOperationException("Simulated failure");
-			return _inner.SetAsync(key, value, options, token);
-		}
-
-		public void Refresh(string key)
-		{
-			if (ShouldFail)
-				throw new InvalidOperationException("Simulated failure");
-			_inner.Refresh(key);
-		}
-
-		public Task RefreshAsync(string key, CancellationToken token = default)
-		{
-			if (ShouldFail)
-				throw new InvalidOperationException("Simulated failure");
-			return _inner.RefreshAsync(key, token);
-		}
-
-		public void Remove(string key)
-		{
-			if (ShouldFail)
-				throw new InvalidOperationException("Simulated failure");
-			_inner.Remove(key);
-		}
-
-		public Task RemoveAsync(string key, CancellationToken token = default)
-		{
-			if (ShouldFail)
-				throw new InvalidOperationException("Simulated failure");
-			return _inner.RemoveAsync(key, token);
-		}
+		return new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
 	}
 }
