@@ -79,7 +79,31 @@ public sealed class FusionCacheDistributedEntry<TValue>
 
 	internal static FusionCacheDistributedEntry<TValue> CreateFromOptions(TValue value, long timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false);
+		// Compute logical expiration for distributed entries similarly to memory entries
+		TimeSpan effectiveDuration;
+		if (isStale)
+		{
+			effectiveDuration = options.FailSafeThrottleDuration;
+		}
+		else if (options.SlidingExpiration.HasValue)
+		{
+			// Use distributed cache duration override if provided, otherwise fall back to sliding
+			var slide = options.SlidingExpiration.Value;
+			if (options.IsDurationExplicitlySet)
+			{
+				var abs = options.DistributedCacheDuration.GetValueOrDefault(options.Duration);
+				effectiveDuration = slide <= abs ? slide : abs;
+			}
+			else
+			{
+				effectiveDuration = slide;
+			}
+		}
+		else
+		{
+			effectiveDuration = options.DistributedCacheDuration.GetValueOrDefault(options.Duration);
+		}
+		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(effectiveDuration, options, false);
 
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))

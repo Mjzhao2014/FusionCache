@@ -132,6 +132,8 @@ public partial class FusionCache
 			// RETURN THE ENTRY
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
+			// RENEW SLIDING EXPIRATION ON ACCESS (IF APPLICABLE)
+			await MaybeRenewEntrySlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
@@ -178,6 +180,8 @@ public partial class FusionCache
 			{
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
+				// RENEW SLIDING EXPIRATION ON ACCESS (IF APPLICABLE)
+				await MaybeRenewEntrySlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
 
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
@@ -362,6 +366,43 @@ public partial class FusionCache
 		return entry;
 	}
 
+	/// <summary>
+	/// If sliding expiration is configured, renew the logical and physical expiration of the given entry on access.
+	/// This will update both L1 and, if configured, L2 caches to extend the lifetime of frequently used entries.
+	/// </summary>
+	private async ValueTask MaybeRenewEntrySlidingExpirationAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		if (entry.IsStale())
+			return;
+		var slide = options.SlidingExpiration.Value;
+		long newExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(slide, options, true);
+		if (options.IsDurationExplicitlySet)
+		{
+			long absExpTicks = entry.Timestamp + options.Duration.Ticks;
+			if (newExpTicks > absExpTicks)
+				newExpTicks = absExpTicks;
+		}
+		entry.LogicalExpirationTimestamp = newExpTicks;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.IsStale = false;
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, options.EagerRefreshThreshold, newExpTicks);
+		}
+		if (_mca.ShouldWrite(options))
+		{
+			var memOpts = options.Duplicate(options.SlidingExpiration);
+			_mca.SetEntry<TValue>(operationId, key, entry, memOpts);
+		}
+		if (RequiresDistributedOperations(options))
+		{
+			var distOpts = options.Duplicate();
+			distOpts.DistributedCacheDuration = options.SlidingExpiration;
+			await DistributedSetEntryAsync<TValue>(operationId, key, entry, distOpts, token).ConfigureAwait(false);
+		}
+	}
+
 	/// <inheritdoc/>
 	public async ValueTask<TValue> GetOrSetAsync<TValue>(string key, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, Task<TValue>> factory, MaybeValue<TValue> failSafeDefaultValue = default, FusionCacheEntryOptions? options = null, IEnumerable<string>? tags = null, CancellationToken token = default)
 	{
@@ -487,6 +528,8 @@ public partial class FusionCache
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
+			// RENEW SLIDING EXPIRATION ON ACCESS (IF APPLICABLE)
+			await MaybeRenewEntrySlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
@@ -540,6 +583,8 @@ public partial class FusionCache
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
 			}
+			// RENEW SLIDING EXPIRATION ON ACCESS (IF APPLICABLE)
+			await MaybeRenewEntrySlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
 
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);
