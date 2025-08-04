@@ -118,6 +118,9 @@ internal partial class BackplaneAccessor
 
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
+
+			// publish succeeded: record success on the breaker
+			_breaker.RecordSuccess(out var _);
 		}
 		catch (Exception exc)
 		{
@@ -142,6 +145,8 @@ internal partial class BackplaneAccessor
 			return false;
 		}
 
+		// operation succeeded
+		_breaker.RecordSuccess(out var tmp);
 		return true;
 	}
 

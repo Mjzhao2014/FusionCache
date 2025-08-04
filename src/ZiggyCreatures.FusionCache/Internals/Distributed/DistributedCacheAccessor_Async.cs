@@ -44,6 +44,8 @@ internal partial class DistributedCacheAccessor
 			return false;
 		}
 
+		// operation succeeded: reset circuit breaker failure count & possibly close half-open
+		_breaker.RecordSuccess(out var tmp);
 		return true;
 	}
 
@@ -111,6 +113,8 @@ internal partial class DistributedCacheAccessor
 
 			//data = null;
 		}
+		// Serializing the entry succeeded; we'll update the circuit breaker after the distributed
+		// call is attempted in ExecuteOperationAsync.
 
 		if (data is null)
 		{
@@ -164,6 +168,8 @@ internal partial class DistributedCacheAccessor
 				true,
 				token: token
 			).ConfigureAwait(false);
+			// distributed call succeeded: update breaker
+			_breaker.RecordSuccess(out var _);
 		}
 		catch (Exception exc)
 		{
@@ -187,6 +193,7 @@ internal partial class DistributedCacheAccessor
 
 			data = null;
 		}
+		// operation completed successfully: breaker already updated inside try block
 
 		if (data is null)
 		{

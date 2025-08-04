@@ -195,6 +195,12 @@ public class FusionCacheOptions
 	public TimeSpan DistributedCacheCircuitBreakerDuration { get; set; }
 
 	/// <summary>
+	/// The number of consecutive distributed cache failures allowed before opening the circuit breaker.
+	/// Defaults to <c>1</c>, which opens the circuit on the first failure.
+	/// </summary>
+	public int DistributedCacheCircuitBreakerAllowedFailures { get; set; } = 1;
+
+	/// <summary>
 	/// Execute event handlers in a sync fashion, waiting for all of them to complete before moving on.
 	/// <br/><br/>
 	/// <strong>WARNING:</strong> by default this option is NOT enabled, and should remain this way in any normal circumstance unless you really know what you are doing.
@@ -225,6 +231,12 @@ public class FusionCacheOptions
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Backplane.md"/>
 	/// </summary>
 	public TimeSpan BackplaneCircuitBreakerDuration { get; set; }
+
+	/// <summary>
+	/// The number of consecutive backplane failures allowed before opening the circuit breaker.
+	/// Defaults to <c>1</c>, which opens the circuit on the first failure.
+	/// </summary>
+	public int BackplaneCircuitBreakerAllowedFailures { get; set; } = 1;
 
 	/// <summary>
 	/// The prefix to use in the backplane channel name: if not specified the <see cref="CacheName"/> will be used.
