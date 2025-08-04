@@ -84,14 +84,10 @@ internal partial class BackplaneAccessor
 	{
 		if (CheckMessage(operationId, message, isAutoRecovery) == false)
 			return false;
-
 		var cacheKey = message.CacheKey!;
-
-		// CHECK: CURRENTLY NOT USABLE
-		if (IsCurrentlyUsable(operationId, cacheKey) == false)
-		{
+		// CIRCUIT BREAKER: only proceed if circuit allows execution
+		if (_breaker.TryExecute(out var breakerStateChanged) == false)
 			return false;
-		}
 
 		token.ThrowIfCancellationRequested();
 
@@ -142,6 +138,12 @@ internal partial class BackplaneAccessor
 			return false;
 		}
 
+		// consider successful publish a successful call for circuit breaker
+		_breaker.RecordSuccess(out var closedChanged);
+		if (closedChanged)
+		{
+			_events.OnCircuitBreakerChange(operationId, cacheKey, true);
+		}
 		return true;
 	}
 

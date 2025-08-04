@@ -1102,10 +1102,7 @@ public partial class FusionCache
 					var dcaSuccess = false;
 					try
 					{
-						if (dca!.IsCurrentlyUsable(operationId, key))
-						{
-							dcaSuccess = await distributedCacheAction(dca, isBackground, ct1).ConfigureAwait(false);
-						}
+						dcaSuccess = await distributedCacheAction(dca!, isBackground, ct1).ConfigureAwait(false);
 					}
 					catch
 					{

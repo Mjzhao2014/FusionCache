@@ -8,9 +8,6 @@ internal partial class DistributedCacheAccessor
 {
 	private async ValueTask<bool> ExecuteOperationAsync(string operationId, string key, Func<CancellationToken, Task> action, string actionDescription, FusionCacheEntryOptions options, CancellationToken token)
 	{
-		//if (IsCurrentlyUsable(operationId, key) == false)
-		//	return false;
-
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -49,7 +46,8 @@ internal partial class DistributedCacheAccessor
 
 	public async ValueTask<bool> SetEntryAsync<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, bool isBackground, CancellationToken token)
 	{
-		if (IsCurrentlyUsable(operationId, key) == false)
+		// CIRCUIT BREAKER: only proceed if circuit allows execution
+		if (_breaker.TryExecute(out var breakerStateChanged) == false)
 			return false;
 
 		token.ThrowIfCancellationRequested();
@@ -121,7 +119,7 @@ internal partial class DistributedCacheAccessor
 		}
 
 		// SAVE TO DISTRIBUTED CACHE
-		return await ExecuteOperationAsync(
+		var execResult = await ExecuteOperationAsync(
 			operationId,
 			key,
 			async ct =>
@@ -137,6 +135,16 @@ internal partial class DistributedCacheAccessor
 			options,
 			token
 		).ConfigureAwait(false);
+		// record success for circuit breaker
+		if (execResult)
+		{
+			_breaker.RecordSuccess(out var closedChanged);
+			if (closedChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, key, true);
+			}
+		}
+		return execResult;
 	}
 
 	public async ValueTask<(FusionCacheDistributedEntry<TValue>? entry, bool isValid)> TryGetEntryAsync<TValue>(string operationId, string key, FusionCacheEntryOptions options, bool hasFallbackValue, TimeSpan? timeout, CancellationToken token)
@@ -144,8 +152,7 @@ internal partial class DistributedCacheAccessor
 		// METRIC
 		Metrics.CounterDistributedGet.Maybe()?.AddWithCommonTags(1, _options.CacheName, _options.InstanceId!);
 
-		if (IsCurrentlyUsable(operationId, key) == false)
-			return (null, false);
+		// NOTE: the circuit breaker will be applied via IsCurrentlyUsable check before calling TryGetEntryAsync
 
 		if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 			_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] trying to get entry from distributed", _options.CacheName, _options.InstanceId, operationId, key);
@@ -194,8 +201,13 @@ internal partial class DistributedCacheAccessor
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed entry not found", _options.CacheName, _options.InstanceId, operationId, key);
 
 			_events.OnMiss(operationId, key, activity);
-
 			return (null, false);
+		}
+		// If we got data, consider it a successful distributed call for purposes of circuit breaker
+		_breaker.RecordSuccess(out var closedChanged);
+		if (closedChanged)
+		{
+			_events.OnCircuitBreakerChange(operationId, key, true);
 		}
 
 		// DESERIALIZATION

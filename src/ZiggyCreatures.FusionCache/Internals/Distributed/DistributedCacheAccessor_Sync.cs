@@ -8,9 +8,6 @@ internal partial class DistributedCacheAccessor
 {
 	private bool ExecuteOperation(string operationId, string key, Action<CancellationToken> action, string actionDescription, FusionCacheEntryOptions options, CancellationToken token)
 	{
-		//if (IsCurrentlyUsable(operationId, key) == false)
-		//	return false;
-
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -49,7 +46,8 @@ internal partial class DistributedCacheAccessor
 
 	public bool SetEntry<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, bool isBackground, CancellationToken token)
 	{
-		if (IsCurrentlyUsable(operationId, key) == false)
+		// CIRCUIT BREAKER: only proceed if circuit allows execution
+		if (_breaker.TryExecute(out var breakerStateChanged) == false)
 			return false;
 
 		token.ThrowIfCancellationRequested();
@@ -114,7 +112,7 @@ internal partial class DistributedCacheAccessor
 		}
 
 		// SAVE TO DISTRIBUTED CACHE
-		return ExecuteOperation(
+		var execResult = ExecuteOperation(
 			operationId,
 			key,
 			_ =>
@@ -130,6 +128,15 @@ internal partial class DistributedCacheAccessor
 			options,
 			token
 		);
+		if (execResult)
+		{
+			_breaker.RecordSuccess(out var closedChanged);
+			if (closedChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, key, true);
+			}
+		}
+		return execResult;
 	}
 
 	public (FusionCacheDistributedEntry<TValue>? entry, bool isValid) TryGetEntry<TValue>(string operationId, string key, FusionCacheEntryOptions options, bool hasFallbackValue, TimeSpan? timeout, CancellationToken token)
@@ -137,8 +144,7 @@ internal partial class DistributedCacheAccessor
 		// METRIC
 		Metrics.CounterDistributedGet.Maybe()?.AddWithCommonTags(1, _options.CacheName, _options.InstanceId!);
 
-		if (IsCurrentlyUsable(operationId, key) == false)
-			return (null, false);
+		// NOTE: the circuit breaker will be applied via IsCurrentlyUsable check before calling TryGetEntry
 
 		if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 			_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] trying to get entry from distributed", _options.CacheName, _options.InstanceId, operationId, key);
@@ -187,8 +193,12 @@ internal partial class DistributedCacheAccessor
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed entry not found", _options.CacheName, _options.InstanceId, operationId, key);
 
 			_events.OnMiss(operationId, key, activity);
-
 			return (null, false);
+		}
+		_breaker.RecordSuccess(out var closedChanged);
+		if (closedChanged)
+		{
+			_events.OnCircuitBreakerChange(operationId, key, true);
 		}
 
 		// DESERIALIZATION

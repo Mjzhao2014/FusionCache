@@ -405,6 +405,13 @@ internal sealed class AutoRecoveryService
 		var dca = _cache.DistributedCacheAccessor;
 		if (dca.ShouldRead(item.Options) && dca.ShouldWrite(item.Options))
 		{
+			// in order to update memory entries from distributed we require that backplane is currently usable, so updates can later propagate
+			var backplaneAccessor = _cache.BackplaneAccessor;
+			if (backplaneAccessor is not null && backplaneAccessor.IsCurrentlyUsable(operationId, item.CacheKey) == false)
+			{
+				// if backplane is still down, skip processing this item now
+				return false;
+			}
 			if (dca!.IsCurrentlyUsable(operationId, item.CacheKey) == false)
 			{
 				return false;

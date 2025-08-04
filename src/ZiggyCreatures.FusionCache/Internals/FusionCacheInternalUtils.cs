@@ -468,23 +468,19 @@ internal static class FusionCacheInternalUtils
 
 	public static bool CanBeUsed(this DistributedCacheAccessor? dca, string? operationId, string? key)
 	{
+		// if no distributed accessor configured, cannot use
 		if (dca is null)
 			return false;
-
-		if (dca.IsCurrentlyUsable(operationId, key) == false)
-			return false;
-
-		return true;
+		// check circuit breaker through IsCurrentlyUsable (will also raise log/events if state changed)
+		return dca.IsCurrentlyUsable(operationId, key);
 	}
 
 	public static bool ShouldWrite(this BackplaneAccessor? bpa, FusionCacheEntryOptions options)
 	{
 		if (bpa is null)
 			return false;
-
 		if (options.SkipBackplaneNotifications)
 			return false;
-
 		return true;
 	}
 
@@ -492,10 +488,6 @@ internal static class FusionCacheInternalUtils
 	{
 		if (bpa is null)
 			return false;
-
-		if (bpa.IsCurrentlyUsable(operationId, key) == false)
-			return false;
-
 		return true;
 	}
 

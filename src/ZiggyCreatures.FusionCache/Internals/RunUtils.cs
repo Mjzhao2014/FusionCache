@@ -116,7 +116,8 @@ internal static class RunUtils
 		{
 			using (var ctsDelay = CancellationTokenSource.CreateLinkedTokenSource(token))
 			{
-				var actionTask = asyncAction(ctsFunc?.Token ?? token);
+				// ensure the asyncAction runs independent of the current sync context
+				var actionTask = _taskFactory.StartNew(() => asyncAction(ctsFunc?.Token ?? token), token).Unwrap();
 				var delayTask = Task.Delay(timeout, ctsDelay.Token);
 
 				await Task.WhenAny(actionTask, delayTask).ConfigureAwait(false);
