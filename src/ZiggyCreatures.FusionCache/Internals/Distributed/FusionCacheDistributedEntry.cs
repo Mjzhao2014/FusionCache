@@ -79,7 +79,26 @@ public sealed class FusionCacheDistributedEntry<TValue>
 
 	internal static FusionCacheDistributedEntry<TValue> CreateFromOptions(TValue value, long timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false);
+		long exp;
+		if (options.SlidingExpiration.HasValue && isStale == false)
+		{
+			// for sliding expiration initial TTL based on sliding interval from creation, capped by absolute duration if specified (or distributed-specific duration)
+			var nowTicks = timestamp;
+			var baseAbsDuration = options.DistributedCacheDuration ?? options.Duration;
+			var absLimTicks = long.MaxValue;
+			if (baseAbsDuration < TimeSpan.MaxValue)
+			{
+				absLimTicks = nowTicks + baseAbsDuration.Ticks;
+			}
+			var desiredTicks = nowTicks + options.SlidingExpiration.Value.Ticks;
+			if (desiredTicks > absLimTicks)
+				desiredTicks = absLimTicks;
+			exp = desiredTicks;
+		}
+		else
+		{
+			exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false);
+		}
 
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))
@@ -101,7 +120,16 @@ public sealed class FusionCacheDistributedEntry<TValue>
 	internal static FusionCacheDistributedEntry<TValue> CreateFromOtherEntry(IFusionCacheEntry entry, FusionCacheEntryOptions options)
 	{
 		var isStale = entry.IsStale();
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false, new DateTimeOffset(entry.Timestamp, TimeSpan.Zero));
+		long exp;
+		if (options.SlidingExpiration.HasValue && isStale == false)
+		{
+			// if sliding expiration is used propagate the existing logical expiration timestamp (already capped by absolute duration if any)
+			exp = entry.LogicalExpirationTimestamp;
+		}
+		else
+		{
+			exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false, new DateTimeOffset(entry.Timestamp, TimeSpan.Zero));
+		}
 
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, entry.Metadata))
