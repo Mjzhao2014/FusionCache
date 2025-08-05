@@ -136,6 +136,9 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: if configured and this is a valid non-stale hit, renew expiration
+			MaybeRenewEntry<TValue>(operationId, key, memoryEntry!, options, token);
+
 			return memoryEntry;
 		}
 
@@ -362,6 +365,51 @@ public partial class FusionCache
 		return entry;
 	}
 
+	/// <summary>
+	/// When sliding expiration is configured, reset the logical expiration of the entry and recache it in both L1 and L2.
+	/// </summary>
+	private void MaybeRenewEntry<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		// do not renew stale entries / fail-safe fallbacks
+		if (entry.IsStale())
+			return;
+		// compute new logical expiration timestamp
+		var now = DateTimeOffset.UtcNow;
+		var absCapTicks = (options.Duration == TimeSpan.MaxValue) ? long.MaxValue : entry.Timestamp + options.Duration.Ticks;
+		var memExpCandidateTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, allowJittering: true);
+		var newMemExpTicks = absCapTicks == long.MaxValue ? memExpCandidateTicks : Math.Min(memExpCandidateTicks, absCapTicks);
+		entry.LogicalExpirationTimestamp = newMemExpTicks;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(entry.IsStale(), options.EagerRefreshThreshold, newMemExpTicks);
+		}
+		// recache in memory, using sliding TTL as physical duration when fail-safe is disabled
+		if (_mca.ShouldWrite(options))
+		{
+			var memDuration = TimeSpan.FromTicks(newMemExpTicks - now.UtcTicks);
+			// create ephemeral options based on current ones, overriding Duration to match the new physical TTL
+			var memOpts = options.Duplicate(memDuration);
+			_mca.SetEntry<TValue>(operationId, key, entry, memOpts);
+		}
+		// recache in distributed cache
+		if (RequiresDistributedOperations(options))
+		{
+			var distExpCandidateTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, allowJittering: false);
+			var newDistExpTicks = absCapTicks == long.MaxValue ? distExpCandidateTicks : Math.Min(distExpCandidateTicks, absCapTicks);
+			var distLogicalDuration = TimeSpan.FromTicks(newDistExpTicks - entry.Timestamp);
+			var distPhysicalDuration = TimeSpan.FromTicks(newDistExpTicks - now.UtcTicks);
+			var distOpts = options.Duplicate(distLogicalDuration);
+			distOpts.DistributedCacheDuration = distPhysicalDuration;
+			var dca = DistributedCacheAccessor;
+			if (dca is not null)
+			{
+				dca.SetEntry<TValue>(operationId, key, entry, distOpts, false, token);
+			}
+		}
+	}
+
 	/// <inheritdoc/>
 	public TValue GetOrSet<TValue>(string key, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, MaybeValue<TValue> failSafeDefaultValue = default, FusionCacheEntryOptions? options = null, IEnumerable<string>? tags = null, CancellationToken token = default)
 	{
@@ -491,6 +539,9 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: if configured and this is a valid non-stale hit, renew expiration
+			MaybeRenewEntry<TValue>(operationId, key, memoryEntry, options, token);
+
 			return memoryEntry;
 		}
 
@@ -539,6 +590,12 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+			}
+
+			// SLIDING EXPIRATION: if configured and this distributed entry is valid and non-stale, renew expiration
+			if (distributedEntryIsValid && options.SlidingExpiration.HasValue && (distributedEntry!.IsStale() == false))
+			{
+				MaybeRenewEntry<TValue>(operationId, key, memoryEntry, options, token);
 			}
 
 			// EVENT

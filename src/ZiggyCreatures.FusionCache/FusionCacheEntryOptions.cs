@@ -13,9 +13,9 @@ namespace ZiggyCreatures.Caching.Fusion;
 /// Represents all the options available for a single <see cref="IFusionCache"/> entry.
 /// <br/><br/>
 /// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
-/// </summary>
-public sealed class FusionCacheEntryOptions
-{
+	/// </summary>
+	public sealed class FusionCacheEntryOptions
+	{
 	/// <summary>
 	/// Creates a new instance of a <see cref="FusionCacheEntryOptions"/> object.
 	/// <br/><br/>
@@ -56,7 +56,17 @@ public sealed class FusionCacheEntryOptions
 
 		SkipMemoryCacheRead = FusionCacheGlobalDefaults.EntryOptionsSkipMemoryCacheRead;
 		SkipMemoryCacheWrite = FusionCacheGlobalDefaults.EntryOptionsSkipMemoryCacheWrite;
+		// sliding expiration disabled by default
+		SlidingExpiration = null;
 	}
+
+	/// <summary>
+	/// When set, enables <em>sliding expiration</em> semantics on this cache entry: each time the
+	/// entry is successfully read, its expiration will be moved forward by this interval.
+	/// If both <see cref="SlidingExpiration"/> and <see cref="Duration"/> are set, sliding renewals
+	/// will never extend the lifetime beyond the absolute limit imposed by <see cref="Duration"/>.
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; }
 
 	/// <summary>
 	/// The amount of time after which a cache entry is <strong>considered expired</strong>.
@@ -910,6 +920,28 @@ public sealed class FusionCacheEntryOptions
 		return this;
 	}
 
+	/// <summary>
+	/// Enable <em>sliding expiration</em> for this cache entry: every time the entry is accessed successfully
+	/// (ie: it is found in at least one level of the cache and is not expired), its expiration will be moved
+	/// forward by the specified interval. If also <see cref="Duration"/> is set, sliding renewals will never
+	/// extend the lifetime beyond the absolute limit set by <see cref="Duration"/>. If <see cref="Duration"/>
+	/// is left unspecified, sliding semantics will treat the absolute expiration as infinite.
+	/// </summary>
+	/// <param name="slidingExpiration">The duration of the sliding window to apply on each successful access.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan slidingExpiration)
+	{
+		SlidingExpiration = slidingExpiration;
+		// if a sliding expiration is set but an absolute duration has not
+		// been specified, default to infinite absolute expiration so the
+		// entry lifetime is only governed by the sliding window
+		if (Duration == FusionCacheGlobalDefaults.EntryOptionsDuration)
+		{
+			Duration = TimeSpan.MaxValue;
+		}
+		return this;
+	}
+
 	internal DateTimeOffset GetMemoryAbsoluteExpiration(out bool incoherentFailSafeMaxDuration)
 	{
 		// PHYSICAL DURATION
@@ -1085,6 +1117,7 @@ public sealed class FusionCacheEntryOptions
 		return new FusionCacheEntryOptions()
 		{
 			IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching,
+			SlidingExpiration = SlidingExpiration,
 
 			Duration = duration ?? Duration,
 			LockTimeout = LockTimeout,

@@ -136,6 +136,9 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: if configured and this is a valid non-stale hit, renew expiration
+			await MaybeRenewEntryAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+
 			return memoryEntry;
 		}
 
@@ -491,6 +494,9 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: if configured and this is a valid non-stale hit, renew expiration
+			await MaybeRenewEntryAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+
 			return memoryEntry;
 		}
 
@@ -541,6 +547,12 @@ public partial class FusionCache
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
 			}
 
+			// SLIDING EXPIRATION: if configured and this distributed entry is valid and non-stale, renew expiration
+			if (distributedEntryIsValid && options.SlidingExpiration.HasValue && (distributedEntry!.IsStale() == false))
+			{
+				await MaybeRenewEntryAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+			}
+
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);
 
@@ -588,6 +600,49 @@ public partial class FusionCache
 		_events.OnMiss(operationId, key, activity);
 
 		return null;
+	}
+
+	/// <summary>
+	/// When sliding expiration is configured, reset the logical expiration of the entry and recache it in both L1 and L2.
+	/// </summary>
+	private async ValueTask MaybeRenewEntryAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		// do not renew stale entries / fail-safe fallbacks
+		if (entry.IsStale())
+			return;
+		var now = DateTimeOffset.UtcNow;
+		var absCapTicks = (options.Duration == TimeSpan.MaxValue) ? long.MaxValue : entry.Timestamp + options.Duration.Ticks;
+		var memExpCandidateTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, allowJittering: true);
+		var newMemExpTicks = absCapTicks == long.MaxValue ? memExpCandidateTicks : Math.Min(memExpCandidateTicks, absCapTicks);
+		entry.LogicalExpirationTimestamp = newMemExpTicks;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(entry.IsStale(), options.EagerRefreshThreshold, newMemExpTicks);
+		}
+		// recache in memory
+		if (_mca.ShouldWrite(options))
+		{
+			var memDuration = TimeSpan.FromTicks(newMemExpTicks - now.UtcTicks);
+			var memOpts = options.Duplicate(memDuration);
+			_mca.SetEntry<TValue>(operationId, key, entry, memOpts);
+		}
+		// recache in distributed cache
+		if (RequiresDistributedOperations(options))
+		{
+			var distExpCandidateTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, allowJittering: false);
+			var newDistExpTicks = absCapTicks == long.MaxValue ? distExpCandidateTicks : Math.Min(distExpCandidateTicks, absCapTicks);
+			var distLogicalDuration = TimeSpan.FromTicks(newDistExpTicks - entry.Timestamp);
+			var distPhysicalDuration = TimeSpan.FromTicks(newDistExpTicks - now.UtcTicks);
+			var distOpts = options.Duplicate(distLogicalDuration);
+			distOpts.DistributedCacheDuration = distPhysicalDuration;
+			var dca = DistributedCacheAccessor;
+			if (dca is not null)
+			{
+				await dca.SetEntryAsync<TValue>(operationId, key, entry, distOpts, false, token).ConfigureAwait(false);
+			}
+		}
 	}
 
 	/// <inheritdoc/>
