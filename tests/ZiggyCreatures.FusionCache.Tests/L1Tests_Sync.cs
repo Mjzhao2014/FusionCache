@@ -1496,6 +1496,9 @@ public partial class L1Tests
 			}
 		});
 
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
 		// SET WITH SLIDING EXPIRATION
 		cache.Set<int>("foo", 42);
 
@@ -1530,6 +1533,9 @@ public partial class L1Tests
 				SlidingExpiration = TimeSpan.FromSeconds(30)
 			}
 		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
 
 		// SET WITH SLIDING EXPIRATION
 		cache.Set<int>("foo", 42);
