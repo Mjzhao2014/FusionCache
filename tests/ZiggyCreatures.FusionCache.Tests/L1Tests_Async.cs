@@ -1659,6 +1659,7 @@ public partial class L1Tests
 		{
 			DefaultEntryOptions = new FusionCacheEntryOptions()
 			{
+				Duration = TimeSpan.FromHours(1),
 				SlidingExpiration = TimeSpan.FromMilliseconds(500)  // cache will expired in 500ms
 			}
 		});
@@ -1698,6 +1699,7 @@ public partial class L1Tests
 		{
 			DefaultEntryOptions = new FusionCacheEntryOptions()
 			{
+				Duration = TimeSpan.FromHours(1),
 				SlidingExpiration = TimeSpan.FromMilliseconds(500)  // cache will expired in 500ms
 			}
 		});
@@ -1733,6 +1735,7 @@ public partial class L1Tests
 		{
 			DefaultEntryOptions = new FusionCacheEntryOptions()
 			{
+				Duration = TimeSpan.FromHours(1),
 				SlidingExpiration = TimeSpan.FromMilliseconds(500) // cache will expired in 500ms
 			}
 		});
