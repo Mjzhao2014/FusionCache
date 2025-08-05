@@ -135,6 +135,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
+			// SLIDING EXPIRATION RENEWAL
+			RenewEntryExpiration<TValue>(operationId, key, memoryEntry, options, token);
 
 			return memoryEntry;
 		}
@@ -210,6 +212,16 @@ public partial class FusionCache
 			{
 				isStale = false;
 				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				if (_mca.ShouldWrite(options))
+				{
+					// when sliding expiration is configured, RenewEntryExpiration will set appropriate TTLs
+					if (options.SlidingExpiration.HasValue == false)
+					{
+						_mca.SetEntry<TValue>(operationId, key, entry, options);
+					}
+				}
+				// renew sliding expiration if needed
+				RenewEntryExpiration<TValue>(operationId, key, entry, options, token);
 			}
 			else
 			{
@@ -487,10 +499,10 @@ public partial class FusionCache
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
-
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
-
+			// SLIDING EXPIRATION
+			RenewEntryExpiration<TValue>(operationId, key, memoryEntry, options, token);
 			return memoryEntry;
 		}
 
@@ -532,18 +544,19 @@ public partial class FusionCache
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
-
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
 			// SAVING THE DATA IN THE MEMORY CACHE
 			if (_mca.ShouldWrite(options))
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				if (options.SlidingExpiration.HasValue == false)
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				}
 			}
-
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);
-
+			// SLIDING EXPIRATION
+			RenewEntryExpiration<TValue>(operationId, key, memoryEntry, options, token);
 			return memoryEntry;
 		}
 
@@ -1184,6 +1197,62 @@ public partial class FusionCache
 			options,
 			token
 		);
+	}
+
+	/// <summary>
+	/// Renews expiration on an entry when sliding expiration is configured.
+	/// Will update both memory and distributed caches, if applicable.
+	/// </summary>
+	private void RenewEntryExpiration<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		// do not renew for stale/fail-safe values
+		if (entry.IsLogicallyExpired())
+			return;
+		var now = DateTimeOffset.UtcNow;
+		// memory
+		if (_mca.ShouldWrite(options))
+		{
+			var slideExp = now + options.SlidingExpiration.Value;
+			var jitterMs = options.GetJitterDurationMs();
+			var expWithJitter = slideExp + TimeSpan.FromMilliseconds(jitterMs);
+			var memExp = expWithJitter;
+			if (options.IsDurationExplicitlySet)
+			{
+				// entry.Timestamp is ticks, so construct DateTimeOffset first
+				var capExp = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(options.Duration);
+				if (memExp > capExp)
+					memExp = capExp;
+			}
+			entry.LogicalExpirationTimestamp = memExp.UtcTicks;
+			var relativeMemDuration = memExp - now;
+			var memOptions = options.Duplicate();
+			memOptions.JitterMaxDuration = TimeSpan.Zero;
+			memOptions.Duration = relativeMemDuration;
+			_mca.SetEntry<TValue>(operationId, key, entry, memOptions);
+		}
+		// distributed
+		if (RequiresDistributedOperations(options))
+		{
+			var dca = DistributedCacheAccessor;
+			if (dca.ShouldWrite(options) && dca.CanBeUsed(operationId, key))
+			{
+				var slideExpDist = now + options.SlidingExpiration.Value;
+				var distExp = slideExpDist;
+				var capDur = options.DistributedCacheDuration ?? options.Duration;
+				if (options.DistributedCacheDuration.HasValue || options.IsDurationExplicitlySet)
+				{
+					var absCapDist = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(capDur);
+					if (distExp > absCapDist)
+						distExp = absCapDist;
+				}
+				var relativeDistDuration = distExp - now;
+				var distOptions = options.Duplicate();
+				distOptions.DistributedCacheDuration = relativeDistDuration;
+				DistributedSetEntry<TValue>(operationId, key, entry, distOptions, token);
+			}
+		}
 	}
 
 	private void DistributedRemoveEntry(string operationId, string key, FusionCacheEntryOptions options, CancellationToken token)
