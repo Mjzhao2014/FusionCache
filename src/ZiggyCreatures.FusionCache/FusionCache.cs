@@ -1068,6 +1068,110 @@ public sealed partial class FusionCache
 		}
 	}
 
+	private void RenewSlidingExpiration<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		// only renew if current entry is not stale (fail-safe fallback) and is currently valid
+		if (entry.IsStale())
+			return;
+		var sliding = options.SlidingExpiration.Value;
+		var now = DateTimeOffset.UtcNow;
+		var creationTime = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero);
+		// compute bounds for memory logical expiration
+		TimeSpan maxMemDuration = options.Duration;
+		var memCapExpiration = creationTime.Add(maxMemDuration);
+		var memDuration = sliding;
+		var timeToCap = memCapExpiration - now;
+		if (timeToCap < memDuration)
+			memDuration = timeToCap;
+		if (memDuration < TimeSpan.Zero)
+			memDuration = TimeSpan.Zero;
+		// compute bounds for distributed expiration
+		TimeSpan distBaseDuration = options.DistributedCacheDuration ?? options.Duration;
+		var distCapExpiration = creationTime.Add(distBaseDuration);
+		var distDuration = sliding;
+		var timeToDistCap = distCapExpiration - now;
+		if (timeToDistCap < distDuration)
+			distDuration = timeToDistCap;
+		if (distDuration < TimeSpan.Zero)
+			distDuration = TimeSpan.Zero;
+		// build updated options
+		var updateOptions = options.Duplicate();
+		updateOptions.Duration = memDuration;
+		updateOptions.DistributedCacheDuration = distDuration;
+		// update entry logical expiration and eager refresh metadata
+		var newLogicalExp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(memDuration, updateOptions, true);
+		entry.LogicalExpirationTimestamp = newLogicalExp;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.IsStale = false;
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, updateOptions.EagerRefreshThreshold, newLogicalExp);
+		}
+		// update memory cache
+		if (_mca.ShouldWrite(updateOptions))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, updateOptions);
+		}
+		// update distributed cache TTL
+		if (RequiresDistributedOperations(updateOptions))
+		{
+			DistributedSetEntry<TValue>(operationId, key, entry, updateOptions, token);
+		}
+	}
+
+	private async ValueTask RenewSlidingExpirationAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		if (entry.IsStale())
+			return;
+		var sliding = options.SlidingExpiration.Value;
+		var now = DateTimeOffset.UtcNow;
+		var creationTime = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero);
+		TimeSpan maxMemDuration = options.Duration;
+		var memCapExpiration = creationTime.Add(maxMemDuration);
+		var memDuration = sliding;
+		var timeToCap = memCapExpiration - now;
+		if (timeToCap < memDuration)
+			memDuration = timeToCap;
+		if (memDuration < TimeSpan.Zero)
+			memDuration = TimeSpan.Zero;
+		TimeSpan distBaseDuration = options.DistributedCacheDuration ?? options.Duration;
+		var distCapExpiration = creationTime.Add(distBaseDuration);
+		var distDuration = sliding;
+		var timeToDistCap = distCapExpiration - now;
+		if (timeToDistCap < distDuration)
+			distDuration = timeToDistCap;
+		if (distDuration < TimeSpan.Zero)
+			distDuration = TimeSpan.Zero;
+		var updateOptions = options.Duplicate();
+		updateOptions.Duration = memDuration;
+		updateOptions.DistributedCacheDuration = distDuration;
+		var newLogicalExp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(memDuration, updateOptions, true);
+		entry.LogicalExpirationTimestamp = newLogicalExp;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.IsStale = false;
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, updateOptions.EagerRefreshThreshold, newLogicalExp);
+		}
+		if (_mca.ShouldWrite(updateOptions))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, updateOptions);
+		}
+		if (RequiresDistributedOperations(updateOptions))
+		{
+			if (MustAwaitDistributedOperations(updateOptions))
+			{
+				await DistributedSetEntryAsync<TValue>(operationId, key, entry, updateOptions, token).ConfigureAwait(false);
+			}
+			else
+			{
+				_ = DistributedSetEntryAsync<TValue>(operationId, key, entry, updateOptions, token);
+			}
+		}
+	}
+
 	// IDISPOSABLE
 
 	private bool _disposedValue = false;

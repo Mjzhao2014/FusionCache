@@ -135,6 +135,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
+			// SLIDING EXPIRATION
+			RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options, token);
 
 			return memoryEntry;
 		}
@@ -178,10 +180,13 @@ public partial class FusionCache
 			{
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
-
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
-
+		 	 	return memoryEntry;
+				// EVENT
+				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
+				// SLIDING EXPIRATION
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options, token);
 				return memoryEntry;
 			}
 
@@ -352,6 +357,8 @@ public partial class FusionCache
 		{
 			// EVENT
 			_events.OnHit(operationId, key, isStale || entry.IsStale(), activity);
+			// SLIDING EXPIRATION (distributed cache hit path)
+			RenewSlidingExpiration<TValue>(operationId, key, entry, options!, token);
 		}
 		else
 		{
@@ -487,10 +494,13 @@ public partial class FusionCache
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
-
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
-
+			return memoryEntry;
+			// EVENT
+			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
+			// SLIDING EXPIRATION
+			RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options, token);
 			return memoryEntry;
 		}
 
@@ -532,18 +542,25 @@ public partial class FusionCache
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
-
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
 			// SAVING THE DATA IN THE MEMORY CACHE
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
 			}
-
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);
-
+			return memoryEntry;
+			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
+			// SAVING THE DATA IN THE MEMORY CACHE
+			if (_mca.ShouldWrite(options))
+			{
+				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+			}
+			// EVENT
+			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);
+			// SLIDING EXPIRATION
+			RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options, token);
 			return memoryEntry;
 		}
 
