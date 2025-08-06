@@ -81,6 +81,64 @@ public partial class FusionCache
 		});
 	}
 
+	// SLIDING EXPIRATION
+	private async ValueTask MaybeRenewEntryExpirationAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		if (entry.IsLogicallyExpired() || entry.IsStale())
+			return;
+		token.ThrowIfCancellationRequested();
+		var sliding = options.SlidingExpiration!.Value;
+		var now = DateTimeOffset.UtcNow;
+		DateTimeOffset newMemAbs;
+		if (options.Duration == TimeSpan.MaxValue)
+		{
+			newMemAbs = now.Add(sliding);
+		}
+		else
+		{
+			var absCap = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(options.Duration);
+			newMemAbs = now.Add(sliding);
+			if (newMemAbs > absCap)
+				newMemAbs = absCap;
+		}
+		var newMemDuration = newMemAbs - now;
+		if (newMemDuration < TimeSpan.Zero)
+			newMemDuration = TimeSpan.Zero;
+		var renewOptions = options.Duplicate(newMemDuration);
+		renewOptions.SlidingExpiration = options.SlidingExpiration;
+		if (options.DistributedCacheDuration.HasValue)
+		{
+			TimeSpan distBase = options.DistributedCacheDuration.Value;
+			DateTimeOffset newDistAbs;
+			if (distBase == TimeSpan.MaxValue)
+			{
+				newDistAbs = now.Add(sliding);
+			}
+			else
+			{
+				var distCap = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(distBase);
+				newDistAbs = now.Add(sliding);
+				if (newDistAbs > distCap)
+					newDistAbs = distCap;
+			}
+			var newDistDuration = newDistAbs - now;
+			if (newDistDuration < TimeSpan.Zero)
+				newDistDuration = TimeSpan.Zero;
+			renewOptions.DistributedCacheDuration = newDistDuration;
+		}
+		var newEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(entry.GetValue<TValue>(), entry.Timestamp, entry.Tags, renewOptions, false, entry.Metadata?.LastModifiedTimestamp, entry.Metadata?.ETag);
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, newEntry, renewOptions);
+		}
+		if (RequiresDistributedOperations(options))
+		{
+			await DistributedSetEntryAsync<TValue>(operationId, key, newEntry, renewOptions, token).ConfigureAwait(false);
+		}
+	}
+
 	private async ValueTask<IFusionCacheMemoryEntry?> GetOrSetEntryInternalAsync<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, Task<TValue>> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
 	{
 		options ??= _defaultEntryOptions;
@@ -403,7 +461,10 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSetAsync<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			// RENEW EXPIRATION VIA SLIDING EXPIRATION IF NEEDED
+			await MaybeRenewEntryExpirationAsync<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token).ConfigureAwait(false);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -451,7 +512,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSetAsync<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			await MaybeRenewEntryExpirationAsync<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token).ConfigureAwait(false);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -625,7 +688,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): TryGetAsync<T> return (has value)", CacheName, InstanceId, operationId, key);
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			await MaybeRenewEntryExpirationAsync<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token).ConfigureAwait(false);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -672,7 +737,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrDefaultAsync<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			await MaybeRenewEntryExpirationAsync<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token).ConfigureAwait(false);
+			return value;
 		}
 		catch (Exception exc)
 		{

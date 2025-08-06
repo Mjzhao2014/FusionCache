@@ -59,6 +59,13 @@ public sealed class FusionCacheEntryOptions
 	}
 
 	/// <summary>
+	/// An optional sliding expiration for the cache entry: if set, the expiration timer will be reset each time the item is accessed (as long as it is still valid).
+	/// When using sliding expiration without also specifying an absolute <see cref="Duration"/>, the absolute expiration will be effectively unlimited (infinite), so the value will keep sliding forward indefinitely while accessed.
+	/// If both <see cref="SlidingExpiration"/> and <see cref="Duration"/> are set, sliding resets will be capped by the absolute expiration determined by <see cref="Duration"/>.
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; }
+
+	/// <summary>
 	/// The amount of time after which a cache entry is <strong>considered expired</strong>.
 	/// <br/><br/>
 	/// Please note the wording "considered expired" here: what it means is that, although from the OUTSIDE what is observed is always the same (a piece of data logically expires after the specified <see cref="Duration"/>), on the INSIDE things change depending on the fact that fail-safe is enabled or not.
@@ -526,6 +533,22 @@ public sealed class FusionCacheEntryOptions
 	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
 	public FusionCacheEntryOptions SetDurationInfinite()
 	{
+		Duration = TimeSpan.MaxValue;
+		return this;
+	}
+
+	/// <summary>
+	/// Sets the sliding expiration for this entry. When sliding expiration is set, every access to this cache entry will reset its expiration by the specified duration, as long as the entry is still valid.
+	/// If no absolute <see cref="Duration"/> has been specified earlier, this will also set <see cref="Duration"/> to <see cref="TimeSpan.MaxValue"/>, effectively removing any absolute expiration.
+	/// To use sliding expiration with a maximum absolute lifespan, call <see cref="SetDuration(TimeSpan)"/> after this to cap the sliding expiration window.
+	/// </summary>
+	/// <param name="slidingExpiration">The amount of time by which the expiration should be extended on each access.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan slidingExpiration)
+	{
+		SlidingExpiration = slidingExpiration;
+		// If a sliding expiration is set and no explicit absolute duration has been set, default to infinite absolute expiration
+		// to allow indefinite sliding.
 		Duration = TimeSpan.MaxValue;
 		return this;
 	}
@@ -1126,7 +1149,8 @@ public sealed class FusionCacheEntryOptions
 			SkipMemoryCacheRead = SkipMemoryCacheRead,
 			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
 
-			EnableAutoClone = EnableAutoClone
+			EnableAutoClone = EnableAutoClone,
+			SlidingExpiration = SlidingExpiration
 		};
 	}
 

@@ -1035,4 +1035,134 @@ public partial class L1L2Tests
 		Assert.Equal(1, memoryCache1.Count);
 		Assert.Equal(2, memoryCache2.Count);
 	}
+
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public void SlidingExpirationWorksWithTagging(SerializerType serializerType)
+	{
+		var keyFoo = CreateRandomCacheKey("sliding_tag_foo");
+		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+		var distributedCache = CreateDistributedCache();
+		using var fusionCache = new FusionCache(CreateFusionCacheOptions(), memoryCache).SetupDistributedCache(distributedCache, TestsUtils.GetSerializer(serializerType));
+		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+
+		// SET ITEM WITH SLIDING EXPIRATION + TAG
+		fusionCache.Set<int>(keyFoo, 42, opt => opt.SetSliding(TimeSpan.FromMinutes(5)), tags: ["test-tag"]);
+
+		// VERIFY PRESENT
+		var value1 = fusionCache.GetOrDefault<int>(keyFoo, -1);
+		Assert.Equal(42, value1);
+
+		// ACCESS WITHIN SLIDING WINDOW TO RENEW
+		Thread.Sleep(200);
+		var value2 = fusionCache.GetOrDefault<int>(keyFoo, -1);
+		Assert.Equal(42, value2);
+
+		// EVICT BY TAG
+		fusionCache.RemoveByTag("test-tag");
+
+		// VERIFY GONE REGARDLESS OF EXPIRATION STATUS
+		var value3 = fusionCache.GetOrDefault<int>(keyFoo, -1);
+		Assert.Equal(-1, value3);
+	}
+
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public void SlidingExpirationL2DistributedCachePersistence(SerializerType serializerType)
+	{
+		var keyFoo = CreateRandomCacheKey("sliding_persist_foo");
+		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+		var distributedCache = CreateDistributedCache();
+
+		var cacheOptions = new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		};
+
+		using var fusionCache = new FusionCache(cacheOptions, memoryCache).SetupDistributedCache(distributedCache, TestsUtils.GetSerializer(serializerType));
+		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+
+		int factoryCalls = 0;
+
+		var value1 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls);
+		Assert.Equal(1, value1);
+		Assert.Equal(1, factoryCalls);
+
+		// Hit the L1 cache and renew for 500ms
+		Thread.Sleep(300); 
+		var value2 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls);
+		Assert.Equal(1, value2);
+		Assert.Equal(1, factoryCalls);
+
+		Thread.Sleep(300); 
+		// REMOVE FROM MEMORY TO TEST L2 RETRIEVAL
+		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
+
+		// ACCESS SHOULD RETRIEVE FROM L2 AND RENEW SLIDING WINDOW 500ms
+		var value3 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls);
+		Assert.Equal(1, value3); // Should get from L2
+		Assert.Equal(1, factoryCalls); // Factory should not be called
+
+		// NOW WAIT PAST SLIDING DURATION
+		Thread.Sleep(600);
+
+		var value4 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls);
+		Assert.Equal(2, value4); // New value
+		Assert.Equal(2, factoryCalls); // Factory called again
+	}
+
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public void SlidingExpirationWorksWithL1L2FailSafe(SerializerType serializerType)
+	{
+		var keyFoo = CreateRandomCacheKey("sliding_failsafe_foo");
+		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+		var distributedCache = CreateDistributedCache();
+
+		var cacheOptions = new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500),
+				IsFailSafeEnabled = true,
+				FailSafeMaxDuration = TimeSpan.FromMinutes(5)
+			}
+		};
+
+		using var fusionCache = new FusionCache(cacheOptions, memoryCache).SetupDistributedCache(distributedCache, TestsUtils.GetSerializer(serializerType));
+		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+
+		int factoryCalls = 0;
+
+		// INITIAL SET WITH SLIDING + FAIL-SAFE
+		var value1 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls);
+		Assert.Equal(1, value1);
+		Assert.Equal(1, factoryCalls);
+
+		// ACCESS WITHIN SLIDING WINDOW FROM L1 AND L2
+		Thread.Sleep(300);
+		var value2 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls);
+		Assert.Equal(1, value2);
+		Assert.Equal(1, factoryCalls);
+
+		// REMOVE FROM MEMORY TO TEST L2 FAIL-SAFE
+		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
+
+		Thread.Sleep(300);
+		var value3 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls);
+		Assert.Equal(1, value3); // Should get from L2
+		Assert.Equal(1, factoryCalls);
+
+		// WAIT PAST SLIDING DURATION BUT FACTORY FAILS
+		Thread.Sleep(600);
+		var value4 = fusionCache.GetOrSet<int>(keyFoo, _ => throw new Exception("Simulated error"));
+		Assert.Equal(1, value4); // Should get stale value from fail-safe (L1 or L2)
+		
+		// fail safe won't renew sliding window. set new value. 
+		var value5 = fusionCache.GetOrSet<int>(keyFoo, _ => ++factoryCalls);
+		Assert.Equal(2, value5); // get value from factory
+	}
 }

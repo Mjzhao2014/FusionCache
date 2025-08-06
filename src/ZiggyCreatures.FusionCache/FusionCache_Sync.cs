@@ -81,6 +81,71 @@ public partial class FusionCache
 		});
 	}
 
+	// SLIDING EXPIRATION
+
+	private void MaybeRenewEntryExpiration<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		if (entry.IsLogicallyExpired() || entry.IsStale())
+			return;
+		token.ThrowIfCancellationRequested();
+		var sliding = options.SlidingExpiration!.Value;
+		var now = DateTimeOffset.UtcNow;
+		// compute new absolute expiration for memory level, honoring any absolute Duration cap
+		DateTimeOffset newMemAbs;
+		if (options.Duration == TimeSpan.MaxValue)
+		{
+			newMemAbs = now.Add(sliding);
+		}
+		else
+		{
+			var absCap = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(options.Duration);
+			newMemAbs = now.Add(sliding);
+			if (newMemAbs > absCap)
+				newMemAbs = absCap;
+		}
+		var newMemDuration = newMemAbs - now;
+		if (newMemDuration < TimeSpan.Zero)
+			newMemDuration = TimeSpan.Zero;
+		// duplicate options and override TTLs
+		var renewOptions = options.Duplicate(newMemDuration);
+		renewOptions.SlidingExpiration = options.SlidingExpiration;
+		// compute distributed TTL override if needed
+		if (options.DistributedCacheDuration.HasValue)
+		{
+			TimeSpan distBase = options.DistributedCacheDuration.Value;
+			DateTimeOffset newDistAbs;
+			if (distBase == TimeSpan.MaxValue)
+			{
+				newDistAbs = now.Add(sliding);
+			}
+			else
+			{
+				var distCap = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(distBase);
+				newDistAbs = now.Add(sliding);
+				if (newDistAbs > distCap)
+					newDistAbs = distCap;
+			}
+			var newDistDuration = newDistAbs - now;
+			if (newDistDuration < TimeSpan.Zero)
+				newDistDuration = TimeSpan.Zero;
+			renewOptions.DistributedCacheDuration = newDistDuration;
+		}
+		// build new memory entry with updated expiration
+		var newEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(entry.GetValue<TValue>(), entry.Timestamp, entry.Tags, renewOptions, false, entry.Metadata?.LastModifiedTimestamp, entry.Metadata?.ETag);
+		// update memory cache TTL
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, newEntry, renewOptions);
+		}
+		// update distributed cache TTL as well if needed
+		if (RequiresDistributedOperations(options))
+		{
+			DistributedSetEntry<TValue>(operationId, key, newEntry, renewOptions, token);
+		}
+	}
+
 	private IFusionCacheMemoryEntry? GetOrSetEntryInternal<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
 	{
 		options ??= _defaultEntryOptions;
@@ -403,7 +468,10 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSet<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			// RENEW EXPIRATION VIA SLIDING EXPIRATION
+			MaybeRenewEntryExpiration<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -451,7 +519,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSet<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			MaybeRenewEntryExpiration<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -625,7 +695,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): TryGet<T> return (has value)", CacheName, InstanceId, operationId, key);
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			MaybeRenewEntryExpiration<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -672,7 +744,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrDefault<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			MaybeRenewEntryExpiration<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token);
+			return value;
 		}
 		catch (Exception exc)
 		{
