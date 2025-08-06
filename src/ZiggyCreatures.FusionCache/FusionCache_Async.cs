@@ -141,6 +141,7 @@ public partial class FusionCache
 
 		IFusionCacheMemoryEntry? entry;
 		bool isStale = false;
+		bool usedSliding = false;
 		var hasNewValue = false;
 
 		try
@@ -182,6 +183,9 @@ public partial class FusionCache
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
+				// SLIDING EXPIRATION
+				await MaybeRenewEntryAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+
 				return memoryEntry;
 			}
 
@@ -209,7 +213,16 @@ public partial class FusionCache
 			if (distributedEntryIsValid)
 			{
 				isStale = false;
-				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				if (options.SlidingExpiration.HasValue)
+				{
+					var renewEntry = await MaybeRenewEntryAsync<TValue>(operationId, key, distributedEntry!, options, token).ConfigureAwait(false);
+					entry = renewEntry ?? FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+					usedSliding = true;
+				}
+				else
+				{
+					entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				}
 			}
 			else
 			{
@@ -322,7 +335,8 @@ public partial class FusionCache
 			{
 				if (_mca.ShouldWrite(options))
 				{
-					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					var skipPhysicalSet = usedSliding ? true : ReferenceEquals(memoryEntry, entry);
+					_mca.SetEntry<TValue>(operationId, key, entry, options, skipPhysicalSet);
 				}
 			}
 		}
@@ -491,6 +505,9 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION
+			await MaybeRenewEntryAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+
 			return memoryEntry;
 		}
 
@@ -533,12 +550,27 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
 
-			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (_mca.ShouldWrite(options))
+			if (options.SlidingExpiration.HasValue)
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				var renewEntry = await MaybeRenewEntryAsync<TValue>(operationId, key, distributedEntry!, options, token).ConfigureAwait(false);
+				if (renewEntry is not null)
+				{
+					memoryEntry = renewEntry;
+				}
+				else
+				{
+					memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
+				}
+			}
+			else
+			{
+				memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
+
+				// SAVING THE DATA IN THE MEMORY CACHE
+				if (_mca.ShouldWrite(options))
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				}
 			}
 
 			// EVENT

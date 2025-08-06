@@ -75,6 +75,13 @@ public sealed class FusionCacheEntryOptions
 	/// </summary>
 	public TimeSpan Duration { get; set; }
 
+	/// <summary>
+	/// Optional sliding expiration interval: if set, after each successful access of a cached value that is still valid (not expired and not coming from fail-safe) the expiration will be reset so that the new logical expiration is pushed forward.
+	/// If only <see cref="SlidingExpiration"/> is set and <see cref="Duration"/> is left at its default, the entry will keep sliding forward indefinitely: by default, <see cref="Duration"/> will be set to <see cref="TimeSpan.MaxValue"/> when calling <see cref="SetSliding(TimeSpan)"/>.
+	/// If both <see cref="SlidingExpiration"/> and <see cref="Duration"/> are set, the logical expiration will slide forward by <see cref="SlidingExpiration"/> on each access while never exceeding the absolute cap of <see cref="Duration"/> from the original creation time.
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; }
+
 	private float? _eagerRefreshThreshold = null;
 
 	/// <summary>
@@ -501,6 +508,19 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDuration(TimeSpan duration)
 	{
 		Duration = duration;
+		return this;
+	}
+
+	/// <summary>
+	/// Set the <see cref="SlidingExpiration"/> interval for this entry: when set, each successful access of a cached value that is still valid will cause its expiration to be recalculated moving forward by the given interval. If no explicit <see cref="Duration"/> is specified, it will be set to <see cref="TimeSpan.MaxValue"/> so that the entry will keep sliding indefinitely.
+	/// </summary>
+	/// <param name="slidingExpiration">The interval to slide on each access.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan slidingExpiration)
+	{
+		SlidingExpiration = slidingExpiration;
+		// If no explicit Duration has been set, default to sliding without absolute cap
+		Duration = TimeSpan.MaxValue;
 		return this;
 	}
 
@@ -1087,6 +1107,7 @@ public sealed class FusionCacheEntryOptions
 			IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching,
 
 			Duration = duration ?? Duration,
+			SlidingExpiration = SlidingExpiration,
 			LockTimeout = LockTimeout,
 			Size = Size,
 			Priority = Priority,

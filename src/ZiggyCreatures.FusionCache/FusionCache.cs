@@ -972,6 +972,64 @@ public sealed partial class FusionCache
 		return false;
 	}
 
+	/// <summary>
+	/// When sliding expiration is enabled and a valid entry is accessed, compute the new expiration based on sliding interval and renew the TTL in both memory and distributed caches.
+	/// Will not renew expiration for fail-safe fallback values.
+	/// </summary>
+	private FusionCacheMemoryEntry<TValue>? MaybeRenewEntry<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return null;
+		// skip if stale/fail-safe
+		if (entry.Metadata?.IsStale == true)
+			return null;
+		var sliding = options.SlidingExpiration!.Value;
+		var now = DateTimeOffset.UtcNow;
+		// Compute absolute limit for memory expiration based on original creation time and configured Duration
+		long absoluteLimitMemoryTicks = long.MaxValue;
+		if (options.Duration != TimeSpan.MaxValue)
+		{
+			absoluteLimitMemoryTicks = entry.Timestamp + options.Duration.Ticks;
+		}
+		// Baseline sliding expiration from now
+		var newExpMemoryTicks = now.UtcTicks + sliding.Ticks;
+		if (newExpMemoryTicks > absoluteLimitMemoryTicks)
+		{
+			newExpMemoryTicks = absoluteLimitMemoryTicks;
+		}
+		var ttlMemoryTicks = newExpMemoryTicks - now.UtcTicks;
+		if (ttlMemoryTicks <= 0)
+			return null;
+		var renewOptions = options.Duplicate();
+		renewOptions.Duration = TimeSpan.FromTicks(ttlMemoryTicks);
+		// if a distributed cache has its own duration configured, compute its sliding TTL separately
+		if (options.DistributedCacheDuration.HasValue)
+		{
+			var distAbsoluteLimitTicks = entry.Timestamp + options.DistributedCacheDuration.Value.Ticks;
+			var newExpDistTicks = now.UtcTicks + sliding.Ticks;
+			if (newExpDistTicks > distAbsoluteLimitTicks)
+			{
+				newExpDistTicks = distAbsoluteLimitTicks;
+			}
+			var ttlDistTicks = newExpDistTicks - now.UtcTicks;
+			if (ttlDistTicks > 0)
+				renewOptions.DistributedCacheDuration = TimeSpan.FromTicks(ttlDistTicks);
+		}
+		// avoid triggering backplane notifications when only sliding TTL
+		renewOptions.SkipBackplaneNotifications = true;
+		// create a new entry with original timestamp and updated TTL
+		var renewEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(entry.GetValue<TValue>(), entry.Timestamp, entry.Tags, renewOptions, false, entry.Metadata?.LastModifiedTimestamp, entry.Metadata?.ETag);
+		if (_mca.ShouldWrite(renewOptions))
+		{
+			_mca.SetEntry<TValue>(operationId, key, renewEntry, renewOptions);
+		}
+		if (RequiresDistributedOperations(renewOptions))
+		{
+			DistributedSetEntry<TValue>(operationId, key, renewEntry, renewOptions, token);
+		}
+		return renewEntry;
+	}
+
 	internal bool MustAwaitDistributedOperations(FusionCacheEntryOptions options)
 	{
 		if (HasDistributedCache && options.AllowBackgroundDistributedCacheOperations == false)
@@ -989,6 +1047,57 @@ public sealed partial class FusionCache
 			return true;
 
 		return false;
+	}
+
+	/// <summary>
+	/// Async counterpart for sliding expiration renewal.
+	/// </summary>
+	private async ValueTask<FusionCacheMemoryEntry<TValue>?> MaybeRenewEntryAsync<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return null;
+		if (entry.Metadata?.IsStale == true)
+			return null;
+		var sliding = options.SlidingExpiration!.Value;
+		var now = DateTimeOffset.UtcNow;
+		long absoluteLimitMemoryTicks = long.MaxValue;
+		if (options.Duration != TimeSpan.MaxValue)
+		{
+			absoluteLimitMemoryTicks = entry.Timestamp + options.Duration.Ticks;
+		}
+		var newExpMemoryTicks = now.UtcTicks + sliding.Ticks;
+		if (newExpMemoryTicks > absoluteLimitMemoryTicks)
+		{
+			newExpMemoryTicks = absoluteLimitMemoryTicks;
+		}
+		var ttlMemoryTicks = newExpMemoryTicks - now.UtcTicks;
+		if (ttlMemoryTicks <= 0)
+			return null;
+		var renewOptions = options.Duplicate();
+		renewOptions.Duration = TimeSpan.FromTicks(ttlMemoryTicks);
+		if (options.DistributedCacheDuration.HasValue)
+		{
+			var distAbsoluteLimitTicks = entry.Timestamp + options.DistributedCacheDuration.Value.Ticks;
+			var newExpDistTicks = now.UtcTicks + sliding.Ticks;
+			if (newExpDistTicks > distAbsoluteLimitTicks)
+			{
+				newExpDistTicks = distAbsoluteLimitTicks;
+			}
+			var ttlDistTicks = newExpDistTicks - now.UtcTicks;
+			if (ttlDistTicks > 0)
+				renewOptions.DistributedCacheDuration = TimeSpan.FromTicks(ttlDistTicks);
+		}
+		renewOptions.SkipBackplaneNotifications = true;
+		var renewEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(entry.GetValue<TValue>(), entry.Timestamp, entry.Tags, renewOptions, false, entry.Metadata?.LastModifiedTimestamp, entry.Metadata?.ETag);
+		if (_mca.ShouldWrite(renewOptions))
+		{
+			_mca.SetEntry<TValue>(operationId, key, renewEntry, renewOptions);
+		}
+		if (RequiresDistributedOperations(renewOptions))
+		{
+			await DistributedSetEntryAsync<TValue>(operationId, key, renewEntry, renewOptions, token).ConfigureAwait(false);
+		}
+		return renewEntry;
 	}
 
 	// ADAPTIVE CACHING
