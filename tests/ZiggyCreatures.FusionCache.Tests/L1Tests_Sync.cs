@@ -1444,14 +1444,26 @@ public partial class L1Tests
 		// Arrange
 		var options = new FusionCacheEntryOptions();
 		TimeSpan expectedSliding = TimeSpan.FromMinutes(5);
+		TimeSpan duration = TimeSpan.FromMinutes(10);
 
-		// Act
+		// set duration and sliding
+		options.SetDuration(duration);
 		options.SetSliding(expectedSliding);
 
 		// Assert
 		Assert.NotNull(options);
 		Assert.Equal(expectedSliding, options.SlidingExpiration);
-		Assert.Equal(TimeSpan.MaxValue, options.Duration);
+		Assert.Equal(duration, options.Duration);
+
+
+		// set sliding only, duration should be default to MaxValue.
+		var options2 = new FusionCacheEntryOptions();
+		options2.SetSliding(expectedSliding);
+
+		// Assert
+		Assert.NotNull(options2);
+		Assert.Equal(expectedSliding, options2.SlidingExpiration);
+		Assert.Equal(TimeSpan.MaxValue, options2.Duration);
 	}
 
 	[Fact]
