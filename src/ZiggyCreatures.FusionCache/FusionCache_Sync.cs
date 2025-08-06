@@ -135,7 +135,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
-
+			// renew sliding expiration if configured
+			MaybeRenewSlidingExpiration<TValue>(operationId, key, memoryEntry!, options);
 			return memoryEntry;
 		}
 
@@ -210,6 +211,15 @@ public partial class FusionCache
 			{
 				isStale = false;
 				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				// if sliding expiration is configured, we'll recache soon; else write to memory now
+				if (_mca.ShouldWrite(options) && options.SlidingExpiration.HasValue == false)
+				{
+					_mca.SetEntry<TValue>(operationId, key, entry, options);
+				}
+				if (options.SlidingExpiration.HasValue)
+				{
+					MaybeRenewSlidingExpiration<TValue>(operationId, key, entry, options);
+				}
 			}
 			else
 			{
@@ -322,7 +332,11 @@ public partial class FusionCache
 			{
 				if (_mca.ShouldWrite(options))
 				{
-					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					// if this is a new value or we haven't already written via distributed branch, set into memory
+					if (hasNewValue || (distributedEntryIsValid == false) || (distributedEntryIsValid && options.SlidingExpiration.HasValue == false))
+					{
+						_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					}
 				}
 			}
 		}
@@ -490,7 +504,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
-
+			// renew sliding expiration if configured
+			MaybeRenewSlidingExpiration<TValue>(operationId, key, memoryEntry!, options);
 			return memoryEntry;
 		}
 
@@ -534,16 +549,21 @@ public partial class FusionCache
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
 
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (_mca.ShouldWrite(options))
+			if (options.SlidingExpiration.HasValue)
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				MaybeRenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options);
+			}
+			else
+			{
+				// SAVING THE DATA IN THE MEMORY CACHE
+				if (_mca.ShouldWrite(options))
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				}
 			}
 
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);
-
 			return memoryEntry;
 		}
 

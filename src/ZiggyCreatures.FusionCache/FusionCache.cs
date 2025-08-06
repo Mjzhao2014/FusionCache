@@ -199,6 +199,73 @@ public sealed partial class FusionCache
 		_ = Metrics.Meter;
 	}
 
+	/// <summary>
+	/// When sliding expiration is configured and an existing (non-stale) entry is accessed, renew its expiration in both L1 and L2.
+	/// </summary>
+	internal void MaybeRenewSlidingExpiration<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		// compute new logical expiration bounded by absolute duration (if explicitly set)
+		var now = DateTimeOffset.UtcNow;
+		var slidingExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, true, now);
+		var absLimitTicks = entry.Timestamp + (options.IsDurationExplicit ? options.Duration.Ticks : long.MaxValue);
+		var newExpTicks = Math.Min(slidingExpTicks, absLimitTicks);
+		entry.LogicalExpirationTimestamp = newExpTicks;
+		var newDuration = TimeSpan.FromTicks(Math.Max(newExpTicks - now.UtcTicks, 0));
+		var memOptions = options.Duplicate();
+		memOptions.Duration = newDuration;
+		// ensure slidingExpiration preserved in memOptions by Duplicate
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, memOptions);
+		}
+		if (RequiresDistributedOperations(options))
+		{
+			var absLimitDistTicks = entry.Timestamp + ((options.DistributedCacheDuration?.Ticks) ?? (options.IsDurationExplicit ? options.Duration.Ticks : long.MaxValue));
+			var distSlidingExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, false, now);
+			var distNewExpTicks = Math.Min(distSlidingExpTicks, absLimitDistTicks);
+			var distNewDuration = TimeSpan.FromTicks(Math.Max(distNewExpTicks - now.UtcTicks, 0));
+			var distOptions = options.Duplicate();
+			if (options.DistributedCacheDuration.HasValue)
+				distOptions.DistributedCacheDuration = distNewDuration;
+			else
+				distOptions.Duration = distNewDuration;
+			DistributedSetEntry<TValue>(operationId, key, entry, distOptions, CancellationToken.None);
+		}
+	}
+
+	internal async ValueTask MaybeRenewSlidingExpirationAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		var now = DateTimeOffset.UtcNow;
+		var slidingExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, true, now);
+		var absLimitTicks = entry.Timestamp + (options.IsDurationExplicit ? options.Duration.Ticks : long.MaxValue);
+		var newExpTicks = Math.Min(slidingExpTicks, absLimitTicks);
+		entry.LogicalExpirationTimestamp = newExpTicks;
+		var newDuration = TimeSpan.FromTicks(Math.Max(newExpTicks - now.UtcTicks, 0));
+		var memOptions = options.Duplicate();
+		memOptions.Duration = newDuration;
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, memOptions);
+		}
+		if (RequiresDistributedOperations(options))
+		{
+			var absLimitDistTicks = entry.Timestamp + ((options.DistributedCacheDuration?.Ticks) ?? (options.IsDurationExplicit ? options.Duration.Ticks : long.MaxValue));
+			var distSlidingExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, false, now);
+			var distNewExpTicks = Math.Min(distSlidingExpTicks, absLimitDistTicks);
+			var distNewDuration = TimeSpan.FromTicks(Math.Max(distNewExpTicks - now.UtcTicks, 0));
+			var distOptions = options.Duplicate();
+			if (options.DistributedCacheDuration.HasValue)
+				distOptions.DistributedCacheDuration = distNewDuration;
+			else
+				distOptions.Duration = distNewDuration;
+			await DistributedSetEntryAsync<TValue>(operationId, key, entry, distOptions, token).ConfigureAwait(false);
+		}
+	}
+
 	/// <inheritdoc/>
 	public string CacheName
 	{

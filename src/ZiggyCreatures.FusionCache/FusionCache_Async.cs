@@ -135,7 +135,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
-
+			// renew sliding expiration if needed
+			await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry!, options, token).ConfigureAwait(false);
 			return memoryEntry;
 		}
 
@@ -210,6 +211,16 @@ public partial class FusionCache
 			{
 				isStale = false;
 				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				// if sliding expiration is configured, we'll recache using updated ttl; otherwise write to memory now
+				if (_mca.ShouldWrite(options) && options.SlidingExpiration.HasValue == false)
+				{
+					_mca.SetEntry<TValue>(operationId, key, entry, options);
+				}
+				// renew sliding expiration for distributed + memory caches if needed
+				if (options.SlidingExpiration.HasValue)
+				{
+					await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+				}
 			}
 			else
 			{
@@ -322,7 +333,11 @@ public partial class FusionCache
 			{
 				if (_mca.ShouldWrite(options))
 				{
-					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					// if this is a newly created entry or a distributed retrieval without sliding renewal, perform the standard set
+					if (hasNewValue || (distributedEntryIsValid == false) || (distributedEntryIsValid && options.SlidingExpiration.HasValue == false))
+					{
+						_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					}
 				}
 			}
 		}
@@ -490,7 +505,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
-
+			// renew sliding expiration if configured
+			await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry!, options, token).ConfigureAwait(false);
 			return memoryEntry;
 		}
 
@@ -534,16 +550,20 @@ public partial class FusionCache
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
 
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (_mca.ShouldWrite(options))
+			// renew sliding expiration if configured; otherwise just save to memory
+			if (options.SlidingExpiration.HasValue)
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
 			}
-
+			else
+			{
+				if (_mca.ShouldWrite(options))
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				}
+			}
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);
-
 			return memoryEntry;
 		}
 
