@@ -174,6 +174,7 @@ public partial class L1Tests
 		Assert.NotEqual(initialValue, newValue);
 	}
 
+
 	[Fact]
 	public void GetOrDefaultDoesReturnStaleDataWithFailSafe()
 	{
@@ -1435,5 +1436,413 @@ public partial class L1Tests
 
 		Assert.Equal(-1, expectedNegOne);
 		Assert.Equal(1, expectedOne);
+	}
+
+	[Fact]
+	public void SlidingExpirationSetup()
+	{
+		// Arrange
+		var options = new FusionCacheEntryOptions();
+		TimeSpan expectedSliding = TimeSpan.FromSeconds(10);
+		TimeSpan duration = TimeSpan.FromSeconds(30);
+
+		// set duration and sliding
+		options.SetDuration(duration);
+		options.SetSliding(expectedSliding);
+
+		// Assert
+		Assert.NotNull(options);
+		Assert.Equal(expectedSliding, options.SlidingExpiration);
+		Assert.Equal(duration, options.Duration);
+
+
+		// set sliding only, duration should be default to MaxValue.
+		var options2 = new FusionCacheEntryOptions();
+		options2.SetSliding(expectedSliding);
+
+		// Assert
+		Assert.NotNull(options2);
+		Assert.Equal(expectedSliding, options2.SlidingExpiration);
+		Assert.Equal(TimeSpan.MaxValue, options2.Duration);
+	}
+
+	[Fact]
+	public void SlidingExpirationOverrideDefaultDuration()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42, opt => opt.SetDuration(TimeSpan.FromMilliseconds(500)));
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value1);
+
+		// Override the default duration. entry will be expired 
+		Thread.Sleep(300);
+		var value2 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		Thread.Sleep(300);
+		var value3 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(-1, value3); //expired.
+	}
+
+	[Fact]
+	public void SlidingExpirationNoDurationSlidingExpired()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500)
+			}
+		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(-1, value4); // Should be expired
+	}
+
+	[Fact]
+	public void SlidingExpirationNoDurationNotExpired()
+	{
+		//Default duration is 30s 
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromSeconds(30)
+			}
+		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
+
+		// SET WITH SLIDING EXPIRATIONSlidingExpirationNoDurationSlidingExpired
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(10000);
+		var value2 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(10000);
+		var value3 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN 30s default duraiton. Sliding Cache won't be expired.
+		Thread.Sleep(11000);
+		var value4 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value4); // cache is not expired. 
+	}
+
+	[Fact]
+	public void SlidingExpirationWithLongDuration()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				Duration = TimeSpan.FromHours(1),
+				SlidingExpiration = TimeSpan.FromMilliseconds(500)
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(-1, value4); // Should be expired
+	}
+
+	[Fact]
+	public void SlidingExpirationWithShortDuration()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				Duration = TimeSpan.FromMilliseconds(1000),
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value3);
+
+		Thread.Sleep(300);
+		var value4 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value4);
+
+		//Cache expired because the duration is maximum 1000ms
+		Thread.Sleep(300);
+		var value5 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(-1, value4);
+
+	}
+
+	[Fact]
+	public void SlidingExpirationWorksWithFailSafe()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500)
+			}
+		});
+
+		int factoryCalls = 0;
+
+		// SET WITH SLIDING EXPIRATION AND FAIL-SAFE
+		var value1 = cache.GetOrSet<int>("foo", _ => ++factoryCalls);
+		Assert.Equal(1, factoryCalls);
+		Assert.Equal(1, value1);
+
+		// ACCESS WITHIN SLIDING WINDOW
+		Thread.Sleep(200);
+		var value2 = cache.GetOrSet<int>("foo", _ => ++factoryCalls);
+		Assert.Equal(1, value2);
+		Assert.Equal(1, factoryCalls);
+
+		// WAIT LONGER THAN SLIDING DURATION BUT FACTORY THROWS
+		Thread.Sleep(400);
+		var value3 = cache.GetOrSet<int>("foo", _ => throw new Exception("Error"));
+		Assert.Equal(1, value3); // Should return stale value due to fail-safe, won't renew cache
+
+		Thread.Sleep(400);
+		// Cache is expired. Get value from factory
+		var value4 = cache.GetOrSet<int>("foo", _ => ++factoryCalls);
+		Assert.Equal(2, value4); // Should return stale value due to fail-safe
+		Assert.Equal(2, factoryCalls);
+
+	}
+
+	[Fact]
+	public void SlidingExpirationTryGet()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) // cache will expired in 500ms
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.TryGet<int>("foo");
+		Assert.True(value1.HasValue);
+		Assert.Equal(42, value1.Value);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = cache.TryGet<int>("foo");
+		Assert.True(value2.HasValue);
+		Assert.Equal(42, value2.Value);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = cache.TryGet<int>("foo");
+		Assert.True(value3.HasValue);
+		Assert.Equal(42, value3.Value);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = cache.TryGet<int>("foo");
+		Assert.False(value4.HasValue); // Should be expired
+
+	}
+
+	[Fact]
+	public void SlidingExpirationGetOrSet()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) // cache will expired in 500ms
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrSet<int>("foo",-1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = cache.GetOrSet<int>("foo",-1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = cache.GetOrSet<int>("foo",-1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = cache.GetOrSet<int>("foo",-1);
+		Assert.Equal(-1, value4); 
+
+	}
+
+	[Fact]
+	public void SlidingExpirationGetOrDefault()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) // cache will expired in 500ms
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrDefault<int>("foo",-1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = cache.GetOrDefault<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = cache.GetOrDefault<int>("foo",-1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = cache.GetOrDefault<int>("foo",-1);
+		Assert.Equal(-1, value4); // Should be expired
+
+	}
+
+	[Fact]
+	public void SlidingExpirationAdaptiveCache()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				Duration = TimeSpan.FromHours(1),
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.Set<int>("key1", 42);
+
+		cache.Set<int>("key2", 32, opt => opt.SetSliding(TimeSpan.FromMilliseconds(100)));
+
+		cache.Set<int>("key3", 52, opt => opt.SetSliding(TimeSpan.FromMilliseconds(1000)));
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = cache.GetOrSet<int>("key1", -1);
+		Assert.Equal(42, value1);
+
+		var value2 = cache.GetOrSet<int>("key2", -1);
+		Assert.Equal(32, value2);
+
+		var value3 = cache.GetOrSet<int>("key3", -1);
+		Assert.Equal(52, value3);
+
+		Thread.Sleep(300);
+		value1 = cache.GetOrSet<int>("key1", -1);
+		Assert.Equal(42, value1);
+
+		value2 = cache.GetOrSet<int>("key2", -1);
+		Assert.Equal(-1, value2); //key2 expired 
+
+		value3 = cache.GetOrSet<int>("key3", -1);
+		Assert.Equal(52, value3);
+
+		Thread.Sleep(600);
+		value1 = cache.GetOrSet<int>("key1", -1);
+		Assert.Equal(-1, value1); //key1 expired
+
+		value3 = cache.GetOrSet<int>("key3", -1);
+		Assert.Equal(52, value3);
+
+		Thread.Sleep(1200); ;
+		value3 = cache.GetOrSet<int>("key3", -1);
+		Assert.Equal(-1, value3); //key3 expired
+
 	}
 }

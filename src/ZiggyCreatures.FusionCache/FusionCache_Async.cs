@@ -136,6 +136,12 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION
+			if (options.SlidingExpiration.HasValue)
+			{
+				await RenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+			}
+
 			return memoryEntry;
 		}
 
@@ -181,6 +187,11 @@ public partial class FusionCache
 
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
+
+				if (options.SlidingExpiration.HasValue)
+				{
+					await RenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+				}
 
 				return memoryEntry;
 			}
@@ -323,6 +334,11 @@ public partial class FusionCache
 				if (_mca.ShouldWrite(options))
 				{
 					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+				}
+				// If we loaded an existing value from L2 and sliding expiration is on, renew TTLs
+				if (options.SlidingExpiration.HasValue && distributedEntryIsValid && isStale == false)
+				{
+					await RenewSlidingExpirationAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
 				}
 			}
 		}
@@ -490,6 +506,10 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
+			if (options.SlidingExpiration.HasValue)
+			{
+				await RenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+			}
 
 			return memoryEntry;
 		}
@@ -539,6 +559,11 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+			}
+			// renew TTL if sliding expiration is configured
+			if (options.SlidingExpiration.HasValue)
+			{
+				await RenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
 			}
 
 			// EVENT
@@ -715,6 +740,11 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
+			}
+			// adjust initial TTL if sliding expiration is configured
+			if (options.SlidingExpiration.HasValue)
+			{
+				await RenewSlidingExpirationAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -1226,6 +1256,42 @@ public partial class FusionCache
 			options,
 			token
 		);
+	}
+
+	private async ValueTask RenewSlidingExpirationAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		var now = DateTimeOffset.UtcNow;
+		var nowTicks = now.UtcTicks;
+		long absoluteLimitTicks = long.MaxValue;
+		if (options.Duration != TimeSpan.MaxValue)
+		{
+			absoluteLimitTicks = entry.Timestamp + options.Duration.Ticks;
+		}
+		var slideTicks = options.SlidingExpiration!.Value.Ticks;
+		var targetTicks = nowTicks + slideTicks;
+		if (targetTicks > absoluteLimitTicks)
+			targetTicks = absoluteLimitTicks;
+		if (targetTicks <= nowTicks)
+		{
+			return;
+		}
+		var baseDuration = TimeSpan.FromTicks(targetTicks - nowTicks);
+		var tmpOptions = options.Duplicate(baseDuration);
+		tmpOptions.DistributedCacheDuration = baseDuration;
+		var newExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(baseDuration, tmpOptions, true, now);
+		entry.LogicalExpirationTimestamp = newExpTicks;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, tmpOptions.EagerRefreshThreshold, newExpTicks, nowTicks);
+		}
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, tmpOptions);
+		}
+		if (RequiresDistributedOperations(options))
+		{
+			await DistributedSetEntryAsync<TValue>(operationId, key, entry, tmpOptions, token).ConfigureAwait(false);
+		}
 	}
 
 	// INTERNAL STUFF

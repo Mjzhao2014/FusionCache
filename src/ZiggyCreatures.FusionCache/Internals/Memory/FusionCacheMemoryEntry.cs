@@ -79,7 +79,30 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 
 	public static FusionCacheMemoryEntry<TValue> CreateFromOptions(object? value, long? timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.Duration, options, isStale == false);
+		TimeSpan logicalDuration;
+		if (isStale)
+		{
+			logicalDuration = options.FailSafeThrottleDuration;
+		}
+		else if (options.SlidingExpiration.HasValue)
+		{
+			// sliding expiration: on initial set use sliding window, capped by Duration if Duration != infinite
+			if (options.Duration == TimeSpan.MaxValue)
+			{
+				logicalDuration = options.SlidingExpiration.Value;
+			}
+			else
+			{
+				var slideTicks = options.SlidingExpiration.Value.Ticks;
+				var absTicks = options.Duration.Ticks;
+				logicalDuration = TimeSpan.FromTicks(slideTicks < absTicks ? slideTicks : absTicks);
+			}
+		}
+		else
+		{
+			logicalDuration = options.Duration;
+		}
+		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(logicalDuration, options, isStale == false);
 
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))

@@ -136,6 +136,12 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
+			// SLIDING EXPIRATION: renew expiration window if configured
+			if (options.SlidingExpiration.HasValue)
+			{
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options, token);
+			}
+
 			return memoryEntry;
 		}
 
@@ -181,6 +187,11 @@ public partial class FusionCache
 
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
+
+				if (options.SlidingExpiration.HasValue)
+				{
+					RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options, token);
+				}
 
 				return memoryEntry;
 			}
@@ -323,6 +334,11 @@ public partial class FusionCache
 				if (_mca.ShouldWrite(options))
 				{
 					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+				}
+				// If we just loaded a valid value from a secondary cache and sliding expiration is configured, reset the expiration window
+				if (options.SlidingExpiration.HasValue && distributedEntryIsValid && isStale == false)
+				{
+					RenewSlidingExpiration<TValue>(operationId, key, entry, options, token);
 				}
 			}
 		}
@@ -490,6 +506,11 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
+			// SLIDING EXPIRATION
+			if (options.SlidingExpiration.HasValue)
+			{
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options, token);
+			}
 
 			return memoryEntry;
 		}
@@ -539,6 +560,11 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+			}
+			// SLIDING EXPIRATION: renew expiration if configured on sliding accesses
+			if (options.SlidingExpiration.HasValue)
+			{
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options, token);
 			}
 
 			// EVENT
@@ -715,6 +741,11 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
+			}
+			// if sliding expiration is configured, reset initial expiration to sliding TTL window
+			if (options.SlidingExpiration.HasValue)
+			{
+				RenewSlidingExpiration<TValue>(operationId, key, entry, options, token);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -1205,6 +1236,50 @@ public partial class FusionCache
 			options,
 			token
 		);
+	}
+
+	/// <summary>
+	/// When sliding expiration is enabled and an entry is accessed, renew the expiration window by resetting the underlying absolute expiration (physical TTL) in all applicable cache levels.
+	/// </summary>
+	private void RenewSlidingExpiration<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		// compute absolute limit (if any) based on original timestamp + Duration
+		var now = DateTimeOffset.UtcNow;
+		var nowTicks = now.UtcTicks;
+		long absoluteLimitTicks = long.MaxValue;
+		if (options.Duration != TimeSpan.MaxValue)
+		{
+			absoluteLimitTicks = entry.Timestamp + options.Duration.Ticks;
+		}
+		var slideTicks = options.SlidingExpiration!.Value.Ticks;
+		var targetTicks = nowTicks + slideTicks;
+		if (targetTicks > absoluteLimitTicks)
+			targetTicks = absoluteLimitTicks;
+		if (targetTicks <= nowTicks)
+		{
+			// nothing to renew
+			return;
+		}
+		var baseDuration = TimeSpan.FromTicks(targetTicks - nowTicks);
+		// build ephemeral options with sliding window as Duration to update TTLs
+		var tmpOptions = options.Duplicate(baseDuration);
+		tmpOptions.DistributedCacheDuration = baseDuration;
+		// update logical expiration for memory entry (include jitter)
+		var newExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(baseDuration, tmpOptions, true, now);
+		entry.LogicalExpirationTimestamp = newExpTicks;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, tmpOptions.EagerRefreshThreshold, newExpTicks, nowTicks);
+		}
+		// update caches physically
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, tmpOptions);
+		}
+		if (RequiresDistributedOperations(options))
+		{
+			DistributedSetEntry<TValue>(operationId, key, entry, tmpOptions, token);
+		}
 	}
 
 	private void DistributedExpireEntry(string operationId, string key, FusionCacheEntryOptions options, CancellationToken token)

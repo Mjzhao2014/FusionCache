@@ -314,8 +314,14 @@ internal static class FusionCacheInternalUtils
 	{
 		if (entry is FusionCacheDistributedEntry<TValue> entry1)
 			return entry1;
-
-		return FusionCacheDistributedEntry<TValue>.CreateFromOtherEntry(entry, options);
+		// For sliding expiration we want to recompute the absolute expiration anchored at now rather than the original timestamp
+		DateTimeOffset? anchorTime = null;
+		if (options.SlidingExpiration.HasValue == false)
+		{
+			// align TTL to original creation time when not using sliding
+			anchorTime = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero);
+		}
+		return FusionCacheDistributedEntry<TValue>.CreateFromOtherEntry(entry, options, anchorTime);
 	}
 
 	public static FusionCacheMemoryEntry<TValue> AsMemoryEntry<TValue>(this IFusionCacheEntry entry, FusionCacheEntryOptions options)
