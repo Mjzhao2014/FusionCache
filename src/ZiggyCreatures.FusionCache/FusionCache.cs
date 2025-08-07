@@ -1006,6 +1006,104 @@ public sealed partial class FusionCache
 
 	// INTERNAL UPDATES
 
+	/// <summary>
+	/// Compute an effective duration to use for an entry based on the current sliding expiration settings.
+	/// When sliding expiration is configured, this will return a time interval equal to the sliding interval, capped by any absolute duration limit if explicitly set.
+	/// Jitter is applied only on the initial write.
+	/// </summary>
+	private TimeSpan GetEffectiveDurationForSliding(FusionCacheEntryOptions options, long entryTimestamp, bool isInitial)
+	{
+		// No sliding: just use the configured duration
+		if (options.SlidingExpiration is null)
+		{
+			// Jitter will be applied by CreateFromOptions
+			return options.Duration;
+		}
+		var nowTicks = FusionCacheInternalUtils.GetCurrentTimestamp();
+		var slidingTicks = options.SlidingExpiration.Value.Ticks;
+		if (isInitial && options.JitterMaxDuration > TimeSpan.Zero)
+		{
+			// Apply jitter only on initial set
+			slidingTicks += (long)(options.GetJitterDurationMs() * TimeSpan.TicksPerMillisecond);
+		}
+		long effectiveTicks = slidingTicks;
+		// If an absolute duration has been explicitly set, cap the sliding expiration so that we do not exceed it
+		if (options.IsDurationExplicitlySet)
+		{
+			var absLimitTicks = entryTimestamp + options.Duration.Ticks;
+			var candidateExpTicks = nowTicks + effectiveTicks;
+			if (candidateExpTicks > absLimitTicks)
+			{
+				effectiveTicks = absLimitTicks - nowTicks;
+			}
+		}
+		if (effectiveTicks < 0)
+			effectiveTicks = 0;
+		return TimeSpan.FromTicks(effectiveTicks);
+	}
+
+	private void RenewSlidingExpiration<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options)
+	{
+		// We only renew if sliding is configured
+		if (options.SlidingExpiration is null)
+			return;
+		// Do not renew fail-safe/stale entries
+		if (entry.IsStale())
+			return;
+		var now = FusionCacheInternalUtils.GetCurrentTimestamp();
+		var newDuration = GetEffectiveDurationForSliding(options, entry.Timestamp, false);
+		var newExpTicks = now + newDuration.Ticks;
+		if (entry.LogicalExpirationTimestamp == newExpTicks)
+		{
+			// No need to update
+			return;
+		}
+		entry.LogicalExpirationTimestamp = newExpTicks;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, options.EagerRefreshThreshold, newExpTicks);
+		}
+		var effectiveOptions = options.Duplicate(newDuration);
+		effectiveOptions.DistributedCacheDuration = newDuration;
+		// Update L1
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, effectiveOptions);
+		}
+		// Update L2/backplane
+		if (RequiresDistributedOperations(options))
+		{
+			DistributedSetEntry<TValue>(operationId, key, entry, effectiveOptions, CancellationToken.None);
+		}
+	}
+
+	private async ValueTask RenewSlidingExpirationAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options)
+	{
+		if (options.SlidingExpiration is null)
+			return;
+		if (entry.IsStale())
+			return;
+		var now = FusionCacheInternalUtils.GetCurrentTimestamp();
+		var newDuration = GetEffectiveDurationForSliding(options, entry.Timestamp, false);
+		var newExpTicks = now + newDuration.Ticks;
+		if (entry.LogicalExpirationTimestamp == newExpTicks)
+			return;
+		entry.LogicalExpirationTimestamp = newExpTicks;
+		if (entry.Metadata is not null)
+		{
+				entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, options.EagerRefreshThreshold, newExpTicks);
+		}
+		var effectiveOptions = options.Duplicate(newDuration);
+		effectiveOptions.DistributedCacheDuration = newDuration;
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, effectiveOptions);
+		}
+		if (RequiresDistributedOperations(options))
+		{
+			await DistributedSetEntryAsync<TValue>(operationId, key, entry, effectiveOptions, CancellationToken.None).ConfigureAwait(false);
+		}
+	}
 	internal TValue GetValueFromMemoryEntry<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions? options)
 	{
 		options ??= _defaultEntryOptions;

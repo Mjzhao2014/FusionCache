@@ -129,6 +129,11 @@ public partial class FusionCache
 				}
 			}
 
+			// RENEW SLIDING EXPIRATION (IF NEEDED)
+			if (options.SlidingExpiration is not null)
+			{
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry!, options);
+			}
 			// RETURN THE ENTRY
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
@@ -176,6 +181,10 @@ public partial class FusionCache
 
 			if (memoryEntryIsValid)
 			{
+				if (options.SlidingExpiration is not null)
+				{
+					RenewSlidingExpiration<TValue>(operationId, key, memoryEntry!, options);
+				}
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
 
@@ -209,7 +218,13 @@ public partial class FusionCache
 			if (distributedEntryIsValid)
 			{
 				isStale = false;
+				// Start from the distributed entry
 				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
+				// If sliding expiration is set, renew expiration immediately on both L1 and L2
+				if (options.SlidingExpiration is not null)
+				{
+					RenewSlidingExpiration<TValue>(operationId, key, entry, options);
+				}
 			}
 			else
 			{
@@ -219,7 +234,15 @@ public partial class FusionCache
 					var value = factory(null!, token);
 					hasNewValue = true;
 
-					entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tags, options, isStale, null, null);
+					// Determine effective options for initial set (respect sliding expiration)
+					var effectiveOptions = options;
+					if (options.SlidingExpiration is not null)
+					{
+						var effDuration = GetEffectiveDurationForSliding(options, FusionCacheInternalUtils.GetCurrentTimestamp(), true);
+						effectiveOptions = options.Duplicate(effDuration);
+						effectiveOptions.DistributedCacheDuration = effDuration;
+					}
+					entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tags, effectiveOptions, isStale, null, null);
 				}
 				else
 				{
@@ -278,11 +301,21 @@ public partial class FusionCache
 
 							activityForFactory?.Dispose();
 
-							hasNewValue = true;
+						hasNewValue = true;
 
-							UpdateAdaptiveOptions(ctx, ref options);
+						UpdateAdaptiveOptions(ctx, ref options);
 
-							entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, ctx.Tags, options, isStale, ctx.LastModified?.UtcTicks, ctx.ETag);
+						var effectiveOptions = options;
+						if (options.SlidingExpiration is not null)
+						{
+							var effDuration = GetEffectiveDurationForSliding(options, FusionCacheInternalUtils.GetCurrentTimestamp(), true);
+							effectiveOptions = options.Duplicate(effDuration);
+							effectiveOptions.DistributedCacheDuration = effDuration;
+							options = effectiveOptions;
+							// use effective options for subsequent set operations
+							options = effectiveOptions;
+						}
+						entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, ctx.Tags, effectiveOptions, isStale, ctx.LastModified?.UtcTicks, ctx.ETag);
 
 							// EVENTS
 							_events.OnFactorySuccess(operationId, key);
@@ -320,9 +353,13 @@ public partial class FusionCache
 			// SAVING THE DATA IN THE MEMORY CACHE
 			if (entry is not null)
 			{
-				if (_mca.ShouldWrite(options))
+				// If sliding expiration has been handled, we already updated caches inside RenewSlidingExpiration
+				if (options.SlidingExpiration is null)
 				{
-					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					if (_mca.ShouldWrite(options))
+					{
+						_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					}
 				}
 			}
 		}
@@ -485,6 +522,11 @@ public partial class FusionCache
 
 		if (memoryEntryIsValid)
 		{
+			// RENEW SLIDING EXPIRATION (IF NEEDED)
+			if (options.SlidingExpiration is not null)
+			{
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry!, options);
+			}
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
 
@@ -534,11 +576,17 @@ public partial class FusionCache
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
 
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
-
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (_mca.ShouldWrite(options))
+			if (options.SlidingExpiration is not null)
 			{
-				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				RenewSlidingExpiration<TValue>(operationId, key, memoryEntry, options);
+			}
+			else
+			{
+				// SAVING THE DATA IN THE MEMORY CACHE
+				if (_mca.ShouldWrite(options))
+				{
+					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				}
 			}
 
 			// EVENT
@@ -709,17 +757,26 @@ public partial class FusionCache
 
 		try
 		{
+			// Determine effective options for initial set respecting sliding expiration
+			var effectiveOptions = options;
+			if (options.SlidingExpiration is not null)
+			{
+				var effDuration = GetEffectiveDurationForSliding(options, FusionCacheInternalUtils.GetCurrentTimestamp(), true);
+				effectiveOptions = options.Duplicate(effDuration);
+				effectiveOptions.DistributedCacheDuration = effDuration;
+				options = effectiveOptions;
+			}
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
-			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
+			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, effectiveOptions, false, null, null);
 
 			if (_mca.ShouldWrite(options))
 			{
-				_mca.SetEntry<TValue>(operationId, key, entry, options);
+				_mca.SetEntry<TValue>(operationId, key, entry, effectiveOptions);
 			}
 
 			if (RequiresDistributedOperations(options))
 			{
-				DistributedSetEntry<TValue>(operationId, key, entry, options, token);
+				DistributedSetEntry<TValue>(operationId, key, entry, effectiveOptions, token);
 			}
 
 			// EVENT

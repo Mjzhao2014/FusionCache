@@ -16,6 +16,14 @@ namespace ZiggyCreatures.Caching.Fusion;
 /// </summary>
 public sealed class FusionCacheEntryOptions
 {
+	private TimeSpan _duration;
+	private bool _isDurationExplicitlySet;
+
+	/// <summary>
+	/// Indicates whether an explicit absolute expiration duration has been set by the user.
+	/// </summary>
+	internal bool IsDurationExplicitlySet => _isDurationExplicitlySet;
+
 	/// <summary>
 	/// Creates a new instance of a <see cref="FusionCacheEntryOptions"/> object.
 	/// <br/><br/>
@@ -24,7 +32,8 @@ public sealed class FusionCacheEntryOptions
 	/// <param name="duration">The value for the <see cref="Duration"/> option. If null, <see cref="FusionCacheGlobalDefaults.EntryOptionsDuration"/> will be used.</param>
 	public FusionCacheEntryOptions(TimeSpan? duration = null)
 	{
-		Duration = duration ?? FusionCacheGlobalDefaults.EntryOptionsDuration;
+		_isDurationExplicitlySet = duration.HasValue;
+		_duration = duration ?? FusionCacheGlobalDefaults.EntryOptionsDuration;
 		LockTimeout = FusionCacheGlobalDefaults.EntryOptionsLockTimeout;
 		JitterMaxDuration = FusionCacheGlobalDefaults.EntryOptionsJitterMaxDuration;
 		Size = FusionCacheGlobalDefaults.EntryOptionsSize;
@@ -59,6 +68,27 @@ public sealed class FusionCacheEntryOptions
 	}
 
 	/// <summary>
+	/// Optional sliding expiration interval for the cache entry. When set, the logical expiration of the entry will be
+	/// moved forward every time the entry is accessed, so long as the entry has not yet expired, effectively implementing
+	/// sliding expiration semantics.
+	/// <br/><br/>
+	/// When used in combination with <see cref="Duration"/>, the sliding expiration will never move the logical expiration
+	/// beyond the absolute expiration determined by <see cref="Duration"/>.
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; }
+
+	/// <summary>
+	/// Set the sliding expiration interval.
+	/// </summary>
+	/// <param name="slidingExpiration">The sliding expiration interval to use for the entry.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan slidingExpiration)
+	{
+		SlidingExpiration = slidingExpiration;
+		return this;
+	}
+
+	/// <summary>
 	/// The amount of time after which a cache entry is <strong>considered expired</strong>.
 	/// <br/><br/>
 	/// Please note the wording "considered expired" here: what it means is that, although from the OUTSIDE what is observed is always the same (a piece of data logically expires after the specified <see cref="Duration"/>), on the INSIDE things change depending on the fact that fail-safe is enabled or not.
@@ -73,7 +103,15 @@ public sealed class FusionCacheEntryOptions
 	/// <br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 	/// </summary>
-	public TimeSpan Duration { get; set; }
+	public TimeSpan Duration
+	{
+		get => _duration;
+		set
+		{
+			_duration = value;
+			_isDurationExplicitlySet = true;
+		}
+	}
 
 	private float? _eagerRefreshThreshold = null;
 
@@ -455,7 +493,7 @@ public sealed class FusionCacheEntryOptions
 	/// <inheritdoc/>
 	public override string ToString()
 	{
-		return $"[DUR={Duration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
+		return $"[DUR={Duration.ToLogString()} SLID={SlidingExpiration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
 	}
 
 	/// <summary>
@@ -501,6 +539,7 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDuration(TimeSpan duration)
 	{
 		Duration = duration;
+		_isDurationExplicitlySet = true;
 		return this;
 	}
 
@@ -513,6 +552,7 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDurationZero()
 	{
 		Duration = TimeSpan.Zero;
+		_isDurationExplicitlySet = true;
 		return this;
 	}
 
@@ -527,6 +567,7 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDurationInfinite()
 	{
 		Duration = TimeSpan.MaxValue;
+		_isDurationExplicitlySet = true;
 		return this;
 	}
 
@@ -1082,7 +1123,7 @@ public sealed class FusionCacheEntryOptions
 	/// <returns>The newly created <see cref="FusionCacheEntryOptions"/> object.</returns>
 	public FusionCacheEntryOptions Duplicate(TimeSpan? duration = null)
 	{
-		return new FusionCacheEntryOptions()
+		var dup = new FusionCacheEntryOptions()
 		{
 			IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching,
 
@@ -1125,9 +1166,13 @@ public sealed class FusionCacheEntryOptions
 
 			SkipMemoryCacheRead = SkipMemoryCacheRead,
 			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
-
+			
 			EnableAutoClone = EnableAutoClone
 		};
+		// propagate SlidingExpiration and explicit duration flag
+		dup.SlidingExpiration = SlidingExpiration;
+		dup._isDurationExplicitlySet = duration.HasValue ? true : _isDurationExplicitlySet;
+		return dup;
 	}
 
 	internal FusionCacheEntryOptions EnsureIsSafeForAdaptiveCaching()
