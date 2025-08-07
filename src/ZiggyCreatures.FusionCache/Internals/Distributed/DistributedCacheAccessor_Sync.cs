@@ -8,27 +8,22 @@ internal partial class DistributedCacheAccessor
 {
 	private bool ExecuteOperation(string operationId, string key, Action<CancellationToken> action, string actionDescription, FusionCacheEntryOptions options, CancellationToken token)
 	{
-		//if (IsCurrentlyUsable(operationId, key) == false)
-		//	return false;
-
+		var succeeded = false;
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
-
 			RunUtils.RunSyncActionWithTimeout(action, Timeout.InfiniteTimeSpan, true, token: token);
-
+			succeeded = true;
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
 		}
 		catch (Exception exc)
 		{
 			ProcessError(operationId, key, exc, actionDescription);
-
 			// ACTIVITY
 			Activity.Current?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			Activity.Current?.AddException(exc);
-
 			if (exc is not SyntheticTimeoutException && options.ReThrowDistributedCacheExceptions)
 			{
 				if (_options.ReThrowOriginalExceptions)
@@ -40,10 +35,22 @@ internal partial class DistributedCacheAccessor
 					throw new FusionCacheDistributedCacheException("An error occurred while working with the distributed cache", exc);
 				}
 			}
-
 			return false;
 		}
-
+		finally
+		{
+			if (succeeded)
+			{
+				_breaker.RecordSuccess(out var breakerStateChanged);
+				if (breakerStateChanged && _breaker.State == CircuitBreakerState.Closed)
+				{
+					// log reactivation if breaker transitioned to closed
+					if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+						_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
+					_events.OnCircuitBreakerChange(operationId, key, true);
+				}
+			}
+		}
 		return true;
 	}
 
@@ -148,6 +155,7 @@ internal partial class DistributedCacheAccessor
 
 		// GET FROM DISTRIBUTED CACHE
 		byte[]? data;
+		var remoteSucceeded = false;
 		try
 		{
 			timeout ??= options.GetAppropriateDistributedCacheTimeout(hasFallbackValue);
@@ -157,15 +165,14 @@ internal partial class DistributedCacheAccessor
 				true,
 				token: token
 			);
+			remoteSucceeded = true;
 		}
 		catch (Exception exc)
 		{
 			ProcessError(operationId, key, exc, "getting entry from distributed");
-
 			// ACTIVITY
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			activity?.AddException(exc);
-
 			if (exc is not SyntheticTimeoutException && options.ReThrowDistributedCacheExceptions)
 			{
 				if (_options.ReThrowOriginalExceptions)
@@ -177,8 +184,20 @@ internal partial class DistributedCacheAccessor
 					throw new FusionCacheDistributedCacheException("An error occurred while working with the distributed cache", exc);
 				}
 			}
-
 			data = null;
+		}
+		finally
+		{
+			if (remoteSucceeded)
+			{
+				_breaker.RecordSuccess(out var breakerChanged);
+				if (breakerChanged && _breaker.State == CircuitBreakerState.Closed)
+				{
+					if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+						_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
+					_events.OnCircuitBreakerChange(operationId, key, true);
+				}
+			}
 		}
 
 		if (data is null)

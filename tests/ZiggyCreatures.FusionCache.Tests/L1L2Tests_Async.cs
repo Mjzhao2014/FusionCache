@@ -144,6 +144,42 @@ public partial class L1L2Tests
 		Assert.Equal(1, res);
 	}
 
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public async Task DistributedCacheAdvancedCircuitBreakerOpensBasedOnFailureRateAsync(SerializerType serializerType)
+	{
+		var keyFoo = CreateRandomCacheKey("foo");
+		var circuitBreakerDuration = TimeSpan.FromSeconds(2);
+		// configure advanced circuit breaker to open if &gt;=50% failures over window of at least 2 calls
+		var distributedCache = CreateDistributedCache();
+		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
+		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+		var options = CreateFusionCacheOptions();
+		options.EnableAutoRecovery = false;
+		options.DistributedCacheCircuitBreakerDuration = circuitBreakerDuration;
+		options.DistributedCacheCircuitBreakerFailureThreshold = 0.5d;
+		options.DistributedCacheCircuitBreakerMinimumThroughput = 2;
+		options.DistributedCacheCircuitBreakerSamplingDuration = TimeSpan.FromSeconds(10);
+		using var fusionCache = new FusionCache(options, memoryCache);
+		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
+		// initial set succeeds
+		await fusionCache.SetAsync<int>(keyFoo, 1, opt => opt.SetDurationSec(60).SetFailSafe(true));
+		// force failures for two consecutive ops
+		chaosDistributedCache.SetAlwaysThrow();
+		await fusionCache.SetAsync<int>(keyFoo, 2, opt => opt.SetDurationSec(60).SetFailSafe(true));
+		await fusionCache.SetAsync<int>(keyFoo, 3, opt => opt.SetDurationSec(60).SetFailSafe(true));
+		chaosDistributedCache.SetNeverThrow();
+		// next set will be skipped due to open circuit
+		await fusionCache.SetAsync<int>(keyFoo, 4, opt => opt.SetDurationSec(60).SetFailSafe(true));
+		await Task.Delay(circuitBreakerDuration.PlusALittleBit());
+		// remove L1
+		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
+		// should retrieve the original value from L2 because the circuit will half-open and the test call succeeds
+		var res = await fusionCache.GetOrDefaultAsync<int>(keyFoo, -1);
+		Assert.Equal(1, res);
+	}
+
 	private async Task _DistributedCacheWireVersionModifierWorksAsync(SerializerType serializerType, CacheKeyModifierMode modifierMode)
 	{
 		var keyFoo = CreateRandomCacheKey("foo");

@@ -106,27 +106,24 @@ internal partial class BackplaneAccessor
 
 		var actionDescription = "sending a backplane notification" + isAutoRecovery.ToString(" (auto-recovery)") + isBackground.ToString(" (background)");
 
+		var succeeded = false;
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
-
 			await _backplane.PublishAsync(message, options, token).ConfigureAwait(false);
-
+			succeeded = true;
 			// EVENT
 			_events.OnMessagePublished(operationId, message);
-
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
 		}
 		catch (Exception exc)
 		{
 			ProcessError(operationId, cacheKey, exc, actionDescription);
-
 			// ACTIVITY
 			Activity.Current?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			Activity.Current?.AddException(exc);
-
 			if (exc is not SyntheticTimeoutException && options.ReThrowBackplaneExceptions)
 			{
 				if (_options.ReThrowOriginalExceptions)
@@ -138,10 +135,21 @@ internal partial class BackplaneAccessor
 					throw new FusionCacheBackplaneException("An error occurred while working with the backplane", exc);
 				}
 			}
-
 			return false;
 		}
-
+		finally
+		{
+			if (succeeded)
+			{
+				_breaker.RecordSuccess(out var breakerChanged);
+				if (breakerChanged && _breaker.State == CircuitBreakerState.Closed)
+				{
+					if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+						_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId, cacheKey);
+					_events.OnCircuitBreakerChange(operationId, cacheKey, true);
+				}
+			}
+		}
 		return true;
 	}
 
