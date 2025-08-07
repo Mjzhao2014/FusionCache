@@ -1445,26 +1445,32 @@ public partial class L1Tests
 		var options = new FusionCacheEntryOptions();
 		TimeSpan expectedSliding = TimeSpan.FromSeconds(10);
 		TimeSpan duration = TimeSpan.FromSeconds(30);
+		TimeSpan jittering = TimeSpan.FromSeconds(2);
 
 		// set duration and sliding
 		options.SetDuration(duration);
 		options.SetSliding(expectedSliding);
+		options.SetJittering(jittering);
 
 		// Assert
 		Assert.NotNull(options);
 		Assert.Equal(expectedSliding, options.SlidingExpiration);
+		Assert.Equal(jittering, options.JitterMaxDuration);
 		Assert.Equal(duration, options.Duration);
 
 
 		// set sliding only, duration should be default to MaxValue.
 		var options2 = new FusionCacheEntryOptions();
 		options2.SetSliding(expectedSliding);
-
+		options2.SetJittering(jittering);
 		// Assert
 		Assert.NotNull(options2);
 		Assert.Equal(expectedSliding, options2.SlidingExpiration);
+		Assert.Equal(jittering, options2.JitterMaxDuration);
 		Assert.Equal(TimeSpan.MaxValue, options2.Duration);
 	}
+
+	
 
 	[Fact]
 	public void SlidingExpirationOverrideDefaultDuration()
