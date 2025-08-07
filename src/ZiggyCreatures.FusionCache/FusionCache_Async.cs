@@ -403,13 +403,71 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSetAsync<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			// renew sliding expiration if needed
+			await RenewOnAccessAsync<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token).ConfigureAwait(false);
+			return value;
 		}
 		catch (Exception exc)
 		{
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			activity?.AddException(exc);
 			throw;
+		}
+	}
+
+	/// <summary>
+	/// When sliding expiration is enabled and a fresh value is accessed, update the logical expiration and renew the underlying absolute expirations for memory and distributed caches.
+	/// </summary>
+	private async ValueTask RenewOnAccessAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration is null)
+			return;
+		// do not renew for stale values or fail-safe fallbacks
+		if (entry.IsStale())
+			return;
+		var now = DateTimeOffset.UtcNow;
+		var sliding = options.SlidingExpiration.Value;
+		TimeSpan memDuration;
+		if (options.IsDurationExplicitlySet)
+		{
+			var absCapTicks = entry.Timestamp + options.Duration.Ticks;
+			var slideTicks = now.Add(sliding).UtcTicks;
+			var newExpTicks = Math.Min(slideTicks, absCapTicks);
+			memDuration = TimeSpan.FromTicks(Math.Max(0, newExpTicks - now.UtcTicks));
+		}
+		else
+		{
+			memDuration = sliding;
+		}
+		TimeSpan? distDuration = null;
+		if (options.DistributedCacheDuration.HasValue)
+		{
+			var absCapTicks = entry.Timestamp + options.DistributedCacheDuration.Value.Ticks;
+			var slideTicks = now.Add(sliding).UtcTicks;
+			var newExpTicks = Math.Min(slideTicks, absCapTicks);
+			distDuration = TimeSpan.FromTicks(Math.Max(0, newExpTicks - now.UtcTicks));
+		}
+		else
+		{
+			distDuration = memDuration;
+		}
+		var newAbsExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(memDuration, options, true, now);
+		entry.LogicalExpirationTimestamp = newAbsExpTicks;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, options.EagerRefreshThreshold, newAbsExpTicks);
+			entry.Metadata.IsStale = false;
+		}
+		var epOptions = options.Duplicate(memDuration);
+		epOptions.DistributedCacheDuration = distDuration;
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, epOptions);
+		}
+		if (RequiresDistributedOperations(options))
+		{
+			await DistributedSetEntryAsync<TValue>(operationId, key, entry, epOptions, token).ConfigureAwait(false);
 		}
 	}
 
@@ -451,7 +509,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSetAsync<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			await RenewOnAccessAsync<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token).ConfigureAwait(false);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -625,7 +685,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): TryGetAsync<T> return (has value)", CacheName, InstanceId, operationId, key);
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			await RenewOnAccessAsync<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token).ConfigureAwait(false);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -672,7 +734,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrDefaultAsync<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			await RenewOnAccessAsync<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token).ConfigureAwait(false);
+			return value;
 		}
 		catch (Exception exc)
 		{

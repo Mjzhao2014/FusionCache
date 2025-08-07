@@ -14,8 +14,13 @@ namespace ZiggyCreatures.Caching.Fusion;
 /// <br/><br/>
 /// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 /// </summary>
+
 public sealed class FusionCacheEntryOptions
 {
+	// Backing field and flag to detect explicit duration assignment
+	private TimeSpan _duration;
+	private bool _durationHasBeenSet;
+
 	/// <summary>
 	/// Creates a new instance of a <see cref="FusionCacheEntryOptions"/> object.
 	/// <br/><br/>
@@ -24,7 +29,15 @@ public sealed class FusionCacheEntryOptions
 	/// <param name="duration">The value for the <see cref="Duration"/> option. If null, <see cref="FusionCacheGlobalDefaults.EntryOptionsDuration"/> will be used.</param>
 	public FusionCacheEntryOptions(TimeSpan? duration = null)
 	{
-		Duration = duration ?? FusionCacheGlobalDefaults.EntryOptionsDuration;
+		if (duration.HasValue)
+		{
+			_duration = duration.Value;
+			_durationHasBeenSet = true;
+		}
+		else
+		{
+			_duration = FusionCacheGlobalDefaults.EntryOptionsDuration;
+		}
 		LockTimeout = FusionCacheGlobalDefaults.EntryOptionsLockTimeout;
 		JitterMaxDuration = FusionCacheGlobalDefaults.EntryOptionsJitterMaxDuration;
 		Size = FusionCacheGlobalDefaults.EntryOptionsSize;
@@ -73,7 +86,20 @@ public sealed class FusionCacheEntryOptions
 	/// <br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 	/// </summary>
-	public TimeSpan Duration { get; set; }
+	public TimeSpan Duration
+	{
+		get { return _duration; }
+		set
+		{
+			_duration = value;
+			_durationHasBeenSet = true;
+		}
+	}
+
+	/// <summary>
+	/// True if <see cref="Duration"/> has been explicitly set.
+	/// </summary>
+	internal bool IsDurationExplicitlySet => _durationHasBeenSet;
 
 	private float? _eagerRefreshThreshold = null;
 
@@ -103,6 +129,14 @@ public sealed class FusionCacheEntryOptions
 			_eagerRefreshThreshold = value;
 		}
 	}
+
+	/// <summary>
+	/// When set, enables sliding expiration semantics: on each access of a valid item the expiration timer will be reset.
+	/// <br/>
+	/// If set together with <see cref="Duration"/>, the sliding renewal will never exceed the original absolute lifetime.
+	/// If set alone (without explicitly setting <see cref="Duration"/>), the entry will not have a fixed absolute lifetime and will keep sliding as long as it is accessed.
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; }
 
 	/// <summary>
 	/// The timeout to apply when trying to acquire a memory lock during a factory execution.
@@ -455,7 +489,7 @@ public sealed class FusionCacheEntryOptions
 	/// <inheritdoc/>
 	public override string ToString()
 	{
-		return $"[DUR={Duration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
+		return $"[DUR={Duration.ToLogString()} SLID={SlidingExpiration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
 	}
 
 	/// <summary>
@@ -527,6 +561,17 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDurationInfinite()
 	{
 		Duration = TimeSpan.MaxValue;
+		return this;
+	}
+
+	/// <summary>
+	/// Set the <see cref="SlidingExpiration"/> to the specified value, enabling sliding expiration for this entry.
+	/// </summary>
+	/// <param name="slidingExpiration">The sliding expiration duration.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> for chaining.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan slidingExpiration)
+	{
+		SlidingExpiration = slidingExpiration;
 		return this;
 	}
 
@@ -1082,52 +1127,50 @@ public sealed class FusionCacheEntryOptions
 	/// <returns>The newly created <see cref="FusionCacheEntryOptions"/> object.</returns>
 	public FusionCacheEntryOptions Duplicate(TimeSpan? duration = null)
 	{
-		return new FusionCacheEntryOptions()
+		var res = new FusionCacheEntryOptions();
+		// copy internal flag/existing duration first
+		res._duration = duration ?? _duration;
+		if (duration.HasValue)
 		{
-			IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching,
-
-			Duration = duration ?? Duration,
-			LockTimeout = LockTimeout,
-			Size = Size,
-			Priority = Priority,
-			JitterMaxDuration = JitterMaxDuration,
-
-			// NOTE: PERF MICRO-OPT
-			_eagerRefreshThreshold = _eagerRefreshThreshold,
-
-			AllowStaleOnReadOnly = AllowStaleOnReadOnly,
-
-			IsFailSafeEnabled = IsFailSafeEnabled,
-			FailSafeMaxDuration = FailSafeMaxDuration,
-			FailSafeThrottleDuration = FailSafeThrottleDuration,
-
-			FactorySoftTimeout = FactorySoftTimeout,
-			FactoryHardTimeout = FactoryHardTimeout,
-			AllowTimedOutFactoryBackgroundCompletion = AllowTimedOutFactoryBackgroundCompletion,
-
-			DistributedCacheDuration = DistributedCacheDuration,
-			DistributedCacheFailSafeMaxDuration = DistributedCacheFailSafeMaxDuration,
-			DistributedCacheSoftTimeout = DistributedCacheSoftTimeout,
-			DistributedCacheHardTimeout = DistributedCacheHardTimeout,
-
-			ReThrowDistributedCacheExceptions = ReThrowDistributedCacheExceptions,
-			ReThrowSerializationExceptions = ReThrowSerializationExceptions,
-			ReThrowBackplaneExceptions = ReThrowBackplaneExceptions,
-
-			AllowBackgroundDistributedCacheOperations = AllowBackgroundDistributedCacheOperations,
-			AllowBackgroundBackplaneOperations = AllowBackgroundBackplaneOperations,
-
-			SkipBackplaneNotifications = SkipBackplaneNotifications,
-
-			SkipDistributedCacheRead = SkipDistributedCacheRead,
-			SkipDistributedCacheWrite = SkipDistributedCacheWrite,
-			SkipDistributedCacheReadWhenStale = SkipDistributedCacheReadWhenStale,
-
-			SkipMemoryCacheRead = SkipMemoryCacheRead,
-			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
-
-			EnableAutoClone = EnableAutoClone
-		};
+			res._durationHasBeenSet = true;
+		}
+		else
+		{
+			res._durationHasBeenSet = _durationHasBeenSet;
+		}
+	// copy remaining options
+	res.IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching;
+	res.SlidingExpiration = SlidingExpiration;
+	res.LockTimeout = LockTimeout;
+	res.Size = Size;
+	res.Priority = Priority;
+	res.JitterMaxDuration = JitterMaxDuration;
+	// NOTE: PERF MICRO-OPT: copy backing field directly
+	res._eagerRefreshThreshold = _eagerRefreshThreshold;
+	res.AllowStaleOnReadOnly = AllowStaleOnReadOnly;
+	res.IsFailSafeEnabled = IsFailSafeEnabled;
+	res.FailSafeMaxDuration = FailSafeMaxDuration;
+	res.FailSafeThrottleDuration = FailSafeThrottleDuration;
+		res.FactorySoftTimeout = FactorySoftTimeout;
+		res.FactoryHardTimeout = FactoryHardTimeout;
+		res.AllowTimedOutFactoryBackgroundCompletion = AllowTimedOutFactoryBackgroundCompletion;
+		res.DistributedCacheDuration = DistributedCacheDuration;
+		res.DistributedCacheFailSafeMaxDuration = DistributedCacheFailSafeMaxDuration;
+		res.DistributedCacheSoftTimeout = DistributedCacheSoftTimeout;
+		res.DistributedCacheHardTimeout = DistributedCacheHardTimeout;
+		res.ReThrowDistributedCacheExceptions = ReThrowDistributedCacheExceptions;
+		res.ReThrowSerializationExceptions = ReThrowSerializationExceptions;
+		res.ReThrowBackplaneExceptions = ReThrowBackplaneExceptions;
+		res.AllowBackgroundDistributedCacheOperations = AllowBackgroundDistributedCacheOperations;
+		res.AllowBackgroundBackplaneOperations = AllowBackgroundBackplaneOperations;
+		res.SkipBackplaneNotifications = SkipBackplaneNotifications;
+		res.SkipDistributedCacheRead = SkipDistributedCacheRead;
+		res.SkipDistributedCacheWrite = SkipDistributedCacheWrite;
+		res.SkipDistributedCacheReadWhenStale = SkipDistributedCacheReadWhenStale;
+		res.SkipMemoryCacheRead = SkipMemoryCacheRead;
+		res.SkipMemoryCacheWrite = SkipMemoryCacheWrite;
+		res.EnableAutoClone = EnableAutoClone;
+		return res;
 	}
 
 	internal FusionCacheEntryOptions EnsureIsSafeForAdaptiveCaching()

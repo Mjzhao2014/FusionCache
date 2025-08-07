@@ -1068,6 +1068,67 @@ public sealed partial class FusionCache
 		}
 	}
 
+	/// <summary>
+	/// When sliding expiration is enabled and a fresh value is accessed, update the logical expiration and renew the underlying absolute expirations for memory and distributed caches.
+	/// </summary>
+	private void RenewOnAccess<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, CancellationToken token)
+	{
+		if (options.SlidingExpiration is null)
+			return;
+		// do not renew for stale values or fail-safe fallbacks
+		if (entry.IsStale())
+			return;
+		var now = DateTimeOffset.UtcNow;
+		var sliding = options.SlidingExpiration.Value;
+		// compute baseline duration for memory TTL
+		TimeSpan memDuration;
+		if (options.IsDurationExplicitlySet)
+		{
+			var absCapTicks = entry.Timestamp + options.Duration.Ticks;
+			var slideTicks = now.Add(sliding).UtcTicks;
+			var newExpTicks = Math.Min(slideTicks, absCapTicks);
+			memDuration = TimeSpan.FromTicks(Math.Max(0, newExpTicks - now.UtcTicks));
+		}
+		else
+		{
+			memDuration = sliding;
+		}
+		// compute baseline duration for distributed TTL
+		TimeSpan? distDuration = null;
+		if (options.DistributedCacheDuration.HasValue)
+		{
+			var absCapTicks = entry.Timestamp + options.DistributedCacheDuration.Value.Ticks;
+			var slideTicks = now.Add(sliding).UtcTicks;
+			var newExpTicks = Math.Min(slideTicks, absCapTicks);
+			distDuration = TimeSpan.FromTicks(Math.Max(0, newExpTicks - now.UtcTicks));
+		}
+		else
+		{
+			distDuration = memDuration;
+		}
+		// update logical expiration timestamp for sliding
+		var newAbsExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(memDuration, options, true, now);
+		entry.LogicalExpirationTimestamp = newAbsExpTicks;
+		if (entry.Metadata is not null)
+		{
+			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, options.EagerRefreshThreshold, newAbsExpTicks);
+			entry.Metadata.IsStale = false;
+		}
+		// prepare ephemeral options to set caches with the renewed TTLs
+		var epOptions = options.Duplicate(memDuration);
+		epOptions.DistributedCacheDuration = distDuration;
+		// update memory cache expiration
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, epOptions);
+		}
+		// update distributed cache expiration
+		if (RequiresDistributedOperations(options))
+		{
+			DistributedSetEntry<TValue>(operationId, key, entry, epOptions, token);
+		}
+	}
+
 	// IDISPOSABLE
 
 	private bool _disposedValue = false;

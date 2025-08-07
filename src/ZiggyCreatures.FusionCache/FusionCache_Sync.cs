@@ -403,7 +403,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSet<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			RenewOnAccess<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -451,7 +453,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrSet<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			RenewOnAccess<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -625,7 +629,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): TryGet<T> return (has value)", CacheName, InstanceId, operationId, key);
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			RenewOnAccess<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token);
+			return value;
 		}
 		catch (Exception exc)
 		{
@@ -672,7 +678,9 @@ public partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 				_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrDefault<T> return {Entry}", CacheName, InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
 
-			return GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			var value = GetValueFromMemoryEntry<TValue>(operationId, key, entry, options);
+			RenewOnAccess<TValue>(operationId, key, entry, options ?? _defaultEntryOptions, token);
+			return value;
 		}
 		catch (Exception exc)
 		{
