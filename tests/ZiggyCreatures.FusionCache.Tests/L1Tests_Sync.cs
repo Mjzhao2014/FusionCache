@@ -1470,7 +1470,7 @@ public partial class L1Tests
 		Assert.Equal(TimeSpan.MaxValue, options2.Duration);
 	}
 
-	
+
 
 	[Fact]
 	public void SlidingExpirationOverrideDefaultDuration()
@@ -1859,15 +1859,29 @@ public partial class L1Tests
 
 		// Wait for base sliding duration
 		Thread.Sleep(500);
-		
+
 		// Check if any entries survive due to jittering
 		var survivingEntries = entries.Where(key => cache.GetOrDefault<int>(key, -1) == 99).Count();
-		
+
 		// With jittering, some entries might still be alive, some might be expired
 		// This demonstrates that jittering is working (different expiration times)
 		// We can't assert exact numbers due to randomness, but we verify configuration works
-		Assert.True(survivingEntries >= 0 && survivingEntries <= 1000, 
+		Assert.True(survivingEntries >= 0 && survivingEntries <= 1000,
 			$"Surviving entries after jittering should be between 0 and 1000, but got {survivingEntries}");
+
+
+		// check if jittering twice. 
+		cache.Clear();
+		for (int i = 0; i < 1000; i++)
+		{
+			var key = $"entry-{i}";
+			entries.Add(key);
+			cache.Set<int>(key, 99);
+		}
+		Thread.Sleep(650);
+		var survivingEntries2 = entries.Where(key => cache.GetOrDefault<int>(key, -1) == 99).Count();
+		Assert.Equal(0, survivingEntries2);
+
 	}
 
 	[Fact]
