@@ -1668,7 +1668,9 @@ public partial class L1Tests
 		{
 			DefaultEntryOptions = new FusionCacheEntryOptions()
 			{
-				SlidingExpiration = TimeSpan.FromMilliseconds(500)
+				SlidingExpiration = TimeSpan.FromMilliseconds(500),
+				IsFailSafeEnabled = true,
+				FailSafeMaxDuration = TimeSpan.FromMinutes(5)
 			}
 		});
 
