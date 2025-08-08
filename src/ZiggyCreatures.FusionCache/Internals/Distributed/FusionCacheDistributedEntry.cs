@@ -79,7 +79,31 @@ public sealed class FusionCacheDistributedEntry<TValue>
 
 	internal static FusionCacheDistributedEntry<TValue> CreateFromOptions(TValue value, long timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false);
+		long exp;
+		if (isStale)
+		{
+			var durationToUse = options.DistributedCacheDuration ?? options.Duration;
+			exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(durationToUse, options, false);
+		}
+		else if (options.SlidingExpiration.HasValue)
+		{
+			var slidingExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, false);
+			if (options.DurationIsExplicit())
+			{
+				var absDuration = options.DistributedCacheDuration ?? options.Duration;
+				var absTicks = timestamp + absDuration.Ticks;
+				exp = slidingExpTicks > absTicks ? absTicks : slidingExpTicks;
+			}
+			else
+			{
+				exp = slidingExpTicks;
+			}
+		}
+		else
+		{
+			var durationToUse = options.DistributedCacheDuration ?? options.Duration;
+			exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(durationToUse, options, false);
+		}
 
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))

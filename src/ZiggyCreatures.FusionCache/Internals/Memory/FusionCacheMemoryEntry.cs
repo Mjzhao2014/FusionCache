@@ -79,7 +79,32 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 
 	public static FusionCacheMemoryEntry<TValue> CreateFromOptions(object? value, long? timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.Duration, options, isStale == false);
+		// establish an effective timestamp for absolute TTL calculations
+		var effectiveTimestamp = timestamp ?? FusionCacheInternalUtils.GetCurrentTimestamp();
+		long exp;
+		if (isStale)
+		{
+			// for stale values we always use FailSafeThrottleDuration if fail-safe enabled
+			exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.FailSafeThrottleDuration, options, false);
+		}
+		else if (options.SlidingExpiration.HasValue)
+		{
+			// compute sliding logical expiration, clamped by absolute Duration if explicitly set
+			var slidingExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.SlidingExpiration.Value, options, true);
+			if (options.DurationIsExplicit())
+			{
+				var absTicks = effectiveTimestamp + options.Duration.Ticks;
+				exp = slidingExpTicks > absTicks ? absTicks : slidingExpTicks;
+			}
+			else
+			{
+				exp = slidingExpTicks;
+			}
+		}
+		else
+		{
+			exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.Duration, options, true);
+		}
 
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))

@@ -66,7 +66,8 @@ internal sealed class MemoryCacheAccessor
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] saving memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
-			var (memoryEntryOptions, absoluteExpiration) = options.ToMemoryCacheEntryOptionsOrAbsoluteExpiration(_events, _options, _logger, operationId, key, entry.Metadata?.Size, entry.Metadata?.Priority);
+				// compute absolute expiration for this entry (based on current timestamp and options)
+				var (memoryEntryOptions, absoluteExpiration) = options.ToMemoryCacheEntryOptionsOrAbsoluteExpiration(_events, _options, _logger, operationId, key, entry.Metadata?.Size, entry.Metadata?.Priority, entry.Timestamp);
 
 			if (memoryEntryOptions is not null)
 			{

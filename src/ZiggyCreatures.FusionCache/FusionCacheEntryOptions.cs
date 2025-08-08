@@ -16,6 +16,9 @@ namespace ZiggyCreatures.Caching.Fusion;
 /// </summary>
 public sealed class FusionCacheEntryOptions
 {
+	// track if the user explicitly asked for a specific duration
+	private bool _durationExplicitlySet = false;
+
 	/// <summary>
 	/// Creates a new instance of a <see cref="FusionCacheEntryOptions"/> object.
 	/// <br/><br/>
@@ -24,7 +27,15 @@ public sealed class FusionCacheEntryOptions
 	/// <param name="duration">The value for the <see cref="Duration"/> option. If null, <see cref="FusionCacheGlobalDefaults.EntryOptionsDuration"/> will be used.</param>
 	public FusionCacheEntryOptions(TimeSpan? duration = null)
 	{
-		Duration = duration ?? FusionCacheGlobalDefaults.EntryOptionsDuration;
+		if (duration.HasValue)
+		{
+			Duration = duration.Value;
+			_durationExplicitlySet = true;
+		}
+		else
+		{
+			Duration = FusionCacheGlobalDefaults.EntryOptionsDuration;
+		}
 		LockTimeout = FusionCacheGlobalDefaults.EntryOptionsLockTimeout;
 		JitterMaxDuration = FusionCacheGlobalDefaults.EntryOptionsJitterMaxDuration;
 		Size = FusionCacheGlobalDefaults.EntryOptionsSize;
@@ -74,6 +85,23 @@ public sealed class FusionCacheEntryOptions
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 	/// </summary>
 	public TimeSpan Duration { get; set; }
+
+	/// <summary>
+	/// If set, enables a sliding expiration strategy whereby the expiration clock is reset on each access.
+	/// When both <see cref="SlidingExpiration"/> and <see cref="Duration"/> are set, the logical expiration will be renewed on access using <see cref="SlidingExpiration"/>,
+	/// but will never surpass the absolute expiration computed as <c>entry.Timestamp + Duration</c>.
+	/// When <see cref="SlidingExpiration"/> is set and no explicit <see cref="Duration"/> has been specified, the entry is treated as having an absolute expiration of <see cref="DateTimeOffset.MaxValue"/>.
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; }
+
+	/// <summary>
+	/// Returns true if the <see cref="Duration"/> property has been explicitly set by the user.
+	/// When false, <see cref="Duration"/> represents an implicit default and should be treated as infinite if sliding expiration is used.
+	/// </summary>
+	internal bool DurationIsExplicit()
+	{
+		return _durationExplicitlySet;
+	}
 
 	private float? _eagerRefreshThreshold = null;
 
@@ -501,6 +529,7 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDuration(TimeSpan duration)
 	{
 		Duration = duration;
+		_durationExplicitlySet = true;
 		return this;
 	}
 
@@ -513,6 +542,7 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDurationZero()
 	{
 		Duration = TimeSpan.Zero;
+		_durationExplicitlySet = true;
 		return this;
 	}
 
@@ -527,6 +557,7 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDurationInfinite()
 	{
 		Duration = TimeSpan.MaxValue;
+		_durationExplicitlySet = true;
 		return this;
 	}
 
@@ -603,6 +634,17 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDurationMin(int durationMin)
 	{
 		return SetDuration(TimeSpan.FromMinutes(durationMin));
+	}
+
+	/// <summary>
+	/// Set the <see cref="SlidingExpiration"/> to enable sliding expiration.
+	/// </summary>
+	/// <param name="slidingExpiration">The sliding expiration interval.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan slidingExpiration)
+	{
+		SlidingExpiration = slidingExpiration;
+		return this;
 	}
 
 	/// <summary>
@@ -938,12 +980,37 @@ public sealed class FusionCacheEntryOptions
 		return new DateTimeOffset(FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(physicalDuration, this, true), TimeSpan.Zero);
 	}
 
-	internal (MemoryCacheEntryOptions? memoryEntryOptions, DateTimeOffset? absoluteExpiration) ToMemoryCacheEntryOptionsOrAbsoluteExpiration(FusionCacheMemoryEventsHub events, FusionCacheOptions options, ILogger? logger, string operationId, string key, long? size, byte? priority)
+	internal (MemoryCacheEntryOptions? memoryEntryOptions, DateTimeOffset? absoluteExpiration) ToMemoryCacheEntryOptionsOrAbsoluteExpiration(FusionCacheMemoryEventsHub events, FusionCacheOptions options, ILogger? logger, string operationId, string key, long? size, byte? priority, long entryTimestamp)
 	{
 		size ??= Size;
 		priority ??= (byte)Priority;
 
-		var absoluteExpiration = GetMemoryAbsoluteExpiration(out var incoherentFailSafeMaxDuration);
+		// compute absolute expiration for the underlying memory cache
+		DateTimeOffset absoluteExpiration;
+		bool incoherentFailSafeMaxDuration = false;
+		if (IsFailSafeEnabled == false)
+		{
+			if (SlidingExpiration.HasValue)
+			{
+				// when sliding, physical expiration follows sliding expiration for non fail-safe
+				var slidingExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(SlidingExpiration.Value, this, true);
+				if (DurationIsExplicit())
+				{
+					var absTicks = entryTimestamp + Duration.Ticks;
+					slidingExpTicks = slidingExpTicks > absTicks ? absTicks : slidingExpTicks;
+				}
+				absoluteExpiration = new DateTimeOffset(slidingExpTicks, TimeSpan.Zero);
+			}
+			else
+			{
+				absoluteExpiration = GetMemoryAbsoluteExpiration(out incoherentFailSafeMaxDuration);
+			}
+		}
+		else
+		{
+			// fail-safe physical expiration remains based on FailSafeMaxDuration
+			absoluteExpiration = GetMemoryAbsoluteExpiration(out incoherentFailSafeMaxDuration);
+		}
 
 		// INCOHERENT DURATION
 		if (incoherentFailSafeMaxDuration)
@@ -979,41 +1046,39 @@ public sealed class FusionCacheEntryOptions
 		return (res, null);
 	}
 
-	internal DistributedCacheEntryOptions ToDistributedCacheEntryOptions(FusionCacheOptions options, ILogger? logger, string operationId, string key)
+	internal DistributedCacheEntryOptions ToDistributedCacheEntryOptions(FusionCacheOptions options, ILogger? logger, string operationId, string key, long entryTimestamp)
 	{
 		var res = new DistributedCacheEntryOptions();
-
-		// PHYSICAL DURATION
-		TimeSpan physicalDuration;
-		TimeSpan durationToUse;
-
-		durationToUse = DistributedCacheDuration ?? Duration;
-
 		if (IsFailSafeEnabled == false)
 		{
-			// FAIL-SAFE DISABLED
-			physicalDuration = durationToUse;
-		}
-		else
-		{
-			// FAIL-SAFE ENABLED
-			var failSafeMaxDurationToUse = DistributedCacheFailSafeMaxDuration ?? FailSafeMaxDuration;
-			if (failSafeMaxDurationToUse < durationToUse)
+			if (SlidingExpiration.HasValue)
 			{
-				// INCOHERENT DURATION
-				physicalDuration = durationToUse;
-
-				if (logger?.IsEnabled(options.IncoherentOptionsNormalizationLogLevel) ?? false)
-					logger.Log(options.IncoherentOptionsNormalizationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): DistributedCacheFailSafeMaxDuration/FailSafeMaxDuration {FailSafeMaxDuration} was lower than the DistributedCacheDuration/Duration {Duration} on {Options} {MemoryOptions}. Duration has been used instead.", options.CacheName, options.InstanceId, operationId, key, failSafeMaxDurationToUse.ToLogString(), durationToUse.ToLogString(), this.ToLogString(), res.ToLogString());
+				var slidingExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(SlidingExpiration.Value, this, false);
+				if (DurationIsExplicit())
+				{
+					var absTicks = entryTimestamp + (DistributedCacheDuration ?? Duration).Ticks;
+					slidingExpTicks = slidingExpTicks > absTicks ? absTicks : slidingExpTicks;
+				}
+				res.AbsoluteExpiration = new DateTimeOffset(slidingExpTicks, TimeSpan.Zero);
 			}
 			else
 			{
-				physicalDuration = failSafeMaxDurationToUse;
+				var durationToUse = DistributedCacheDuration ?? Duration;
+				res.AbsoluteExpiration = new DateTimeOffset(FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(durationToUse, this, false), TimeSpan.Zero);
 			}
 		}
-
-		res.AbsoluteExpiration = new DateTimeOffset(FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(physicalDuration, this, false), TimeSpan.Zero);
-
+		else
+		{
+			// FAIL-SAFE ENABLED: base physical expiration on fail-safe max duration
+			var durationToUse = DistributedCacheFailSafeMaxDuration ?? FailSafeMaxDuration;
+			// handle incoherent durations as before
+			if (durationToUse < (DistributedCacheDuration ?? Duration))
+			{
+				if (logger?.IsEnabled(options.IncoherentOptionsNormalizationLogLevel) ?? false)
+					logger.Log(options.IncoherentOptionsNormalizationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): DistributedCacheFailSafeMaxDuration/FailSafeMaxDuration {FailSafeMaxDuration} was lower than the DistributedCacheDuration/Duration {Duration} on {Options} {MemoryOptions}. Duration has been used instead.", options.CacheName, options.InstanceId, operationId, key, durationToUse.ToLogString(), (DistributedCacheDuration ?? Duration).ToLogString(), this.ToLogString(), res.ToLogString());
+			}
+			res.AbsoluteExpiration = new DateTimeOffset(FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(durationToUse, this, false), TimeSpan.Zero);
+		}
 		return res;
 	}
 
@@ -1082,11 +1147,13 @@ public sealed class FusionCacheEntryOptions
 	/// <returns>The newly created <see cref="FusionCacheEntryOptions"/> object.</returns>
 	public FusionCacheEntryOptions Duplicate(TimeSpan? duration = null)
 	{
-		return new FusionCacheEntryOptions()
+		var dup = new FusionCacheEntryOptions()
 		{
+			_durationExplicitlySet = _durationExplicitlySet,
 			IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching,
 
 			Duration = duration ?? Duration,
+			SlidingExpiration = SlidingExpiration,
 			LockTimeout = LockTimeout,
 			Size = Size,
 			Priority = Priority,
@@ -1128,6 +1195,12 @@ public sealed class FusionCacheEntryOptions
 
 			EnableAutoClone = EnableAutoClone
 		};
+		// if overriding duration explicitly, set explicit flag on duplicate
+		if (duration.HasValue)
+		{
+			dup._durationExplicitlySet = true;
+		}
+		return dup;
 	}
 
 	internal FusionCacheEntryOptions EnsureIsSafeForAdaptiveCaching()

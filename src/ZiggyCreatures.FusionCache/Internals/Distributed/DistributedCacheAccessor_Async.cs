@@ -126,7 +126,7 @@ internal partial class DistributedCacheAccessor
 			key,
 			async ct =>
 			{
-				var distributedOptions = options.ToDistributedCacheEntryOptions(_options, _logger, operationId, key);
+				var distributedOptions = options.ToDistributedCacheEntryOptions(_options, _logger, operationId, key, entry.Timestamp);
 
 				await _cache.SetAsync(MaybeProcessCacheKey(key), data, distributedOptions, ct).ConfigureAwait(false);
 

@@ -119,7 +119,7 @@ internal partial class DistributedCacheAccessor
 			key,
 			_ =>
 			{
-				var distributedOptions = options.ToDistributedCacheEntryOptions(_options, _logger, operationId, key);
+				var distributedOptions = options.ToDistributedCacheEntryOptions(_options, _logger, operationId, key, entry.Timestamp);
 
 				_cache.Set(MaybeProcessCacheKey(key), data, distributedOptions);
 
