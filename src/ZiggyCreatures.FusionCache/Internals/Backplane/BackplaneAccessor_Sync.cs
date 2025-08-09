@@ -106,27 +106,22 @@ internal partial class BackplaneAccessor
 
 		var actionDescription = "sending a backplane notification" + isAutoRecovery.ToString(" (auto-recovery)") + isBackground.ToString(" (background)");
 
+		var succeeded = false;
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
-
 			_backplane.Publish(message, options, token);
-
-			// EVENT
 			_events.OnMessagePublished(operationId, message);
-
+			succeeded = true;
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
 		}
 		catch (Exception exc)
 		{
 			ProcessError(operationId, cacheKey, exc, actionDescription);
-
-			// ACTIVITY
 			Activity.Current?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			Activity.Current?.AddException(exc);
-
 			if (exc is not SyntheticTimeoutException && options.ReThrowBackplaneExceptions)
 			{
 				if (_options.ReThrowOriginalExceptions)
@@ -138,11 +133,18 @@ internal partial class BackplaneAccessor
 					throw new FusionCacheBackplaneException("An error occurred while working with the backplane", exc);
 				}
 			}
-
-			return false;
 		}
-
-		return true;
+		if (succeeded)
+		{
+			_breaker.RecordSuccess(out var stateChanged);
+			if (stateChanged && _breaker.State == CircuitBreakerState.Closed)
+			{
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId, cacheKey);
+				_events.OnCircuitBreakerChange(operationId, cacheKey, true);
+			}
+		}
+		return succeeded;
 	}
 
 	public bool PublishSet(string operationId, string key, long timestamp, FusionCacheEntryOptions options, bool isAutoRecovery, bool isBackground, CancellationToken token)

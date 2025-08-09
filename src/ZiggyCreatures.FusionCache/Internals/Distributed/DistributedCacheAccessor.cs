@@ -6,6 +6,7 @@ using ZiggyCreatures.Caching.Fusion.Serialization;
 
 namespace ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 
+
 internal sealed partial class DistributedCacheAccessor
 {
 	private readonly IDistributedCache _cache;
@@ -13,7 +14,7 @@ internal sealed partial class DistributedCacheAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheDistributedEventsHub _events;
-	private readonly SimpleCircuitBreaker _breaker;
+	private readonly IFusionCacheCircuitBreaker _breaker;
 	private readonly string _wireFormatToken;
 
 	public DistributedCacheAccessor(IDistributedCache distributedCache, IFusionCacheSerializer serializer, FusionCacheOptions options, ILogger? logger, FusionCacheDistributedEventsHub events)
@@ -33,7 +34,15 @@ internal sealed partial class DistributedCacheAccessor
 		_events = events;
 
 		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerDuration);
+		if (options.DistributedCacheCircuitBreakerFailureThreshold > 0d)
+		{
+			// advanced failure-rate based circuit breaker
+			_breaker = new AdvancedCircuitBreaker(options.DistributedCacheCircuitBreakerFailureThreshold, options.DistributedCacheCircuitBreakerSamplingDuration, options.DistributedCacheCircuitBreakerMinimumThroughput, options.DistributedCacheCircuitBreakerDuration, options.DistributedCacheCircuitBreakerJitterMaxDuration);
+		}
+		else
+		{
+			_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking, options.DistributedCacheCircuitBreakerDuration, options.DistributedCacheCircuitBreakerJitterMaxDuration);
+		}
 
 		// WIRE FORMAT SETUP
 		_wireFormatToken = _options.DistributedCacheKeyModifierMode == CacheKeyModifierMode.Prefix
@@ -56,6 +65,16 @@ internal sealed partial class DistributedCacheAccessor
 		get { return _cache; }
 	}
 
+	/// <summary>
+	/// Gets the current circuit breaker state for testing purposes.
+	/// </summary>
+	internal CircuitBreakerState CircuitBreakerState => _breaker.State;
+
+	/// <summary>
+	/// Gets the current failure count for testing purposes.
+	/// </summary>
+	internal int CircuitBreakerFailureCount => _breaker.CurrentFailureCount;
+
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private string MaybeProcessCacheKey(string key)
 	{
@@ -69,35 +88,26 @@ internal sealed partial class DistributedCacheAccessor
 
 	private void UpdateLastError(string operationId, string key)
 	{
-		// NO DISTRIBUTEC CACHE
 		if (_cache is null)
 			return;
-
-		var res = _breaker.TryOpen(out var hasChanged);
-
-		if (res && hasChanged)
+		_breaker.RecordFailure(out var stateChanged);
+		if (stateChanged && _breaker.State == CircuitBreakerState.Open)
 		{
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated for {BreakDuration}", _options.CacheName, _options.InstanceId, operationId, key, _breaker.BreakDuration);
-
-			// EVENT
+				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated for {BreakDuration}", _options.CacheName, _options.InstanceId, operationId, key, _options.DistributedCacheCircuitBreakerDuration);
 			_events.OnCircuitBreakerChange(operationId, key, false);
 		}
 	}
 
 	public bool IsCurrentlyUsable(string? operationId, string? key)
 	{
-		var res = _breaker.IsClosed(out var hasChanged);
-
-		if (res && hasChanged)
+		var res = _breaker.TryExecute(out var stateChanged);
+		if (stateChanged && _breaker.State == CircuitBreakerState.Closed)
 		{
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
 				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
-
-			// EVENT
 			_events.OnCircuitBreakerChange(operationId, key, true);
 		}
-
 		return res;
 	}
 
