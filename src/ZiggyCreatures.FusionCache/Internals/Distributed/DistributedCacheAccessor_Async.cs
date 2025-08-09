@@ -8,9 +8,6 @@ internal partial class DistributedCacheAccessor
 {
 	private async ValueTask<bool> ExecuteOperationAsync(string operationId, string key, Func<CancellationToken, Task> action, string actionDescription, FusionCacheEntryOptions options, CancellationToken token)
 	{
-		//if (IsCurrentlyUsable(operationId, key) == false)
-		//	return false;
-
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -20,6 +17,15 @@ internal partial class DistributedCacheAccessor
 
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
+
+			// record success for circuit breaker statistics
+			_breaker.RecordSuccess(out var stateChanged);
+			if (stateChanged && _breaker.State == CircuitBreakerState.Closed)
+			{
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
+				_events.OnCircuitBreakerChange(operationId, key, true);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -43,7 +49,6 @@ internal partial class DistributedCacheAccessor
 
 			return false;
 		}
-
 		return true;
 	}
 
@@ -164,6 +169,14 @@ internal partial class DistributedCacheAccessor
 				true,
 				token: token
 			).ConfigureAwait(false);
+			// record success in circuit breaker
+			_breaker.RecordSuccess(out var stateChanged);
+			if (stateChanged && _breaker.State == CircuitBreakerState.Closed)
+			{
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
+				_events.OnCircuitBreakerChange(operationId, key, true);
+			}
 		}
 		catch (Exception exc)
 		{

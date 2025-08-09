@@ -4,6 +4,7 @@ using ZiggyCreatures.Caching.Fusion.Events;
 
 namespace ZiggyCreatures.Caching.Fusion.Internals.Backplane;
 
+
 internal sealed partial class BackplaneAccessor
 {
 	private readonly FusionCache _cache;
@@ -11,7 +12,7 @@ internal sealed partial class BackplaneAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheBackplaneEventsHub _events;
-	private readonly SimpleCircuitBreaker _breaker;
+	private readonly IFusionCacheCircuitBreaker _breaker;
 
 	public BackplaneAccessor(FusionCache cache, IFusionCacheBackplane backplane, FusionCacheOptions options, ILogger? logger)
 	{
@@ -30,7 +31,14 @@ internal sealed partial class BackplaneAccessor
 		_events = _cache.Events.Backplane;
 
 		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerDuration);
+		if (options.BackplaneCircuitBreakerFailureThreshold > 0)
+		{
+			_breaker = new AdvancedCircuitBreaker(options.BackplaneCircuitBreakerFailureThreshold, options.BackplaneCircuitBreakerSamplingDuration, options.BackplaneCircuitBreakerMinimumThroughput, options.BackplaneCircuitBreakerDuration);
+		}
+		else
+		{
+			_breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking, options.BackplaneCircuitBreakerDuration);
+		}
 	}
 
 	public IFusionCacheBackplane Backplane
@@ -38,38 +46,27 @@ internal sealed partial class BackplaneAccessor
 		get { return _backplane; }
 	}
 
-	private void UpdateLastError(string operationId, string key)
+	private void OnRemoteFailure(string operationId, string key)
 	{
-		// NO DISTRIBUTEC CACHE
 		if (_backplane is null)
 			return;
-
-		var res = _breaker.TryOpen(out var hasChanged);
-
-		if (res && hasChanged)
+		var stateChanged = false;
+		_breaker.RecordFailure(out stateChanged);
+		if (stateChanged && _breaker.State == CircuitBreakerState.Open)
 		{
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane temporarily de-activated for {BreakDuration}", _cache.CacheName, _cache.InstanceId, operationId, key, _breaker.BreakDuration);
-
-			// EVENT
+			{
+				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane temporarily de-activated for {BreakDuration}", _cache.CacheName, _cache.InstanceId, operationId, key, _options.BackplaneCircuitBreakerDuration);
+			}
 			_events.OnCircuitBreakerChange(operationId, key, false);
 		}
 	}
 
 	public bool IsCurrentlyUsable(string? operationId, string? key)
 	{
-		var res = _breaker.IsClosed(out var hasChanged);
-
-		if (res && hasChanged)
-		{
-			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId, key);
-
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, key, true);
-		}
-
-		return res;
+		var canExecute = _breaker.TryExecute(out var stateChanged);
+		// For advanced circuit, stateChanged indicates open -> half-open transitions. We only raise events on success in trial.
+		return canExecute;
 	}
 
 	private void ProcessError(string operationId, string key, Exception exc, string actionDescription)
@@ -82,7 +79,7 @@ internal sealed partial class BackplaneAccessor
 			return;
 		}
 
-		UpdateLastError(operationId, key);
+		OnRemoteFailure(operationId, key);
 
 		if (_logger?.IsEnabled(_options.BackplaneErrorsLogLevel) ?? false)
 			_logger.Log(_options.BackplaneErrorsLogLevel, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] an error occurred while " + actionDescription, _cache.CacheName, _cache.InstanceId, operationId, key);

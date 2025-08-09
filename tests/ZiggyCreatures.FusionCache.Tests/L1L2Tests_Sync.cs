@@ -143,6 +143,39 @@ public partial class L1L2Tests
 		Assert.Equal(1, res);
 	}
 
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public void DistributedCacheAdvancedCircuitBreakerOpensBasedOnFailureRate(SerializerType serializerType)
+	{
+		var keyFoo = CreateRandomCacheKey("foo");
+		var circuitBreakerDuration = TimeSpan.FromSeconds(2);
+		// configure advanced circuit breaker to open when &gt;=50% failures within window of at least 2 calls
+		var distributedCache = CreateDistributedCache();
+		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
+		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+		var options = CreateFusionCacheOptions();
+		options.EnableAutoRecovery = false;
+		options.DistributedCacheCircuitBreakerDuration = circuitBreakerDuration;
+		options.DistributedCacheCircuitBreakerFailureThreshold = 0.5d;
+		options.DistributedCacheCircuitBreakerMinimumThroughput = 2;
+		options.DistributedCacheCircuitBreakerSamplingDuration = TimeSpan.FromSeconds(10);
+		using var fusionCache = new FusionCache(options, memoryCache);
+		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
+		// initial distributed set
+		fusionCache.Set<int>(keyFoo, 1, opt => opt.SetDurationSec(60).SetFailSafe(true));
+		chaosDistributedCache.SetAlwaysThrow();
+		fusionCache.Set<int>(keyFoo, 2, opt => opt.SetDurationSec(60).SetFailSafe(true));
+		fusionCache.Set<int>(keyFoo, 3, opt => opt.SetDurationSec(60).SetFailSafe(true));
+		chaosDistributedCache.SetNeverThrow();
+		// next set should be skipped due to open circuit
+		fusionCache.Set<int>(keyFoo, 4, opt => opt.SetDurationSec(60).SetFailSafe(true));
+		Thread.Sleep(circuitBreakerDuration.PlusALittleBit());
+		memoryCache.Remove(TestsUtils.MaybePreProcessCacheKey(keyFoo, TestingCacheKeyPrefix));
+		var res = fusionCache.GetOrDefault<int>(keyFoo, -1);
+		Assert.Equal(1, res);
+	}
+
 	private void _DistributedCacheWireVersionModifierWorks(SerializerType serializerType, CacheKeyModifierMode modifierMode)
 	{
 		var keyFoo = CreateRandomCacheKey("foo");

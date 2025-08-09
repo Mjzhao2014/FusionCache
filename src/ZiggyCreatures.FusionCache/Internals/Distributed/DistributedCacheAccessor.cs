@@ -6,6 +6,7 @@ using ZiggyCreatures.Caching.Fusion.Serialization;
 
 namespace ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 
+
 internal sealed partial class DistributedCacheAccessor
 {
 	private readonly IDistributedCache _cache;
@@ -13,7 +14,7 @@ internal sealed partial class DistributedCacheAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheDistributedEventsHub _events;
-	private readonly SimpleCircuitBreaker _breaker;
+	private readonly IFusionCacheCircuitBreaker _breaker;
 	private readonly string _wireFormatToken;
 
 	public DistributedCacheAccessor(IDistributedCache distributedCache, IFusionCacheSerializer serializer, FusionCacheOptions options, ILogger? logger, FusionCacheDistributedEventsHub events)
@@ -33,7 +34,15 @@ internal sealed partial class DistributedCacheAccessor
 		_events = events;
 
 		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerDuration);
+		if (options.DistributedCacheCircuitBreakerFailureThreshold > 0)
+		{
+			// advanced circuit breaker
+			_breaker = new AdvancedCircuitBreaker(options.DistributedCacheCircuitBreakerFailureThreshold, options.DistributedCacheCircuitBreakerSamplingDuration, options.DistributedCacheCircuitBreakerMinimumThroughput, options.DistributedCacheCircuitBreakerDuration);
+		}
+		else
+		{
+			_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking, options.DistributedCacheCircuitBreakerDuration);
+		}
 
 		// WIRE FORMAT SETUP
 		_wireFormatToken = _options.DistributedCacheKeyModifierMode == CacheKeyModifierMode.Prefix
@@ -67,38 +76,29 @@ internal sealed partial class DistributedCacheAccessor
 		};
 	}
 
-	private void UpdateLastError(string operationId, string key)
+	private void OnRemoteFailure(string operationId, string key)
 	{
-		// NO DISTRIBUTEC CACHE
 		if (_cache is null)
 			return;
-
-		var res = _breaker.TryOpen(out var hasChanged);
-
-		if (res && hasChanged)
+		var opened = false;
+		var stateChanged = false;
+		_breaker.RecordFailure(out stateChanged);
+		opened = _breaker.State == CircuitBreakerState.Open;
+		if (opened && stateChanged)
 		{
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated for {BreakDuration}", _options.CacheName, _options.InstanceId, operationId, key, _breaker.BreakDuration);
-
-			// EVENT
+			{
+				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated for {BreakDuration}", _options.CacheName, _options.InstanceId, operationId, key, _options.DistributedCacheCircuitBreakerDuration);
+			}
 			_events.OnCircuitBreakerChange(operationId, key, false);
 		}
 	}
 
 	public bool IsCurrentlyUsable(string? operationId, string? key)
 	{
-		var res = _breaker.IsClosed(out var hasChanged);
-
-		if (res && hasChanged)
-		{
-			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
-
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, key, true);
-		}
-
-		return res;
+		var canExecute = _breaker.TryExecute(out var stateChanged);
+		// For advanced circuit, a state change here indicates a transition from open to half-open and allowing a test call, but we do not raise events until a success transitions to closed.
+		return canExecute;
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -112,7 +112,7 @@ internal sealed partial class DistributedCacheAccessor
 			return;
 		}
 
-		UpdateLastError(operationId, key);
+		OnRemoteFailure(operationId, key);
 
 		if (_logger?.IsEnabled(_options.DistributedCacheErrorsLogLevel) ?? false)
 			_logger.Log(_options.DistributedCacheErrorsLogLevel, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] an error occurred while " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
