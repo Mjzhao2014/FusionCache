@@ -33,11 +33,11 @@ internal sealed partial class BackplaneAccessor
 		// CIRCUIT-BREAKER
 		if (options.BackplaneCircuitBreakerFailureThreshold > 0)
 		{
-			_breaker = new AdvancedCircuitBreaker(options.BackplaneCircuitBreakerFailureThreshold, options.BackplaneCircuitBreakerSamplingDuration, options.BackplaneCircuitBreakerMinimumThroughput, options.BackplaneCircuitBreakerDuration);
+			_breaker = new AdvancedCircuitBreaker(options.BackplaneCircuitBreakerFailureThreshold, options.BackplaneCircuitBreakerSamplingDuration, options.BackplaneCircuitBreakerMinimumThroughput, options.BackplaneCircuitBreakerDuration, options.BackplaneCircuitBreakerJitterMaxDuration);
 		}
 		else
 		{
-			_breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking, options.BackplaneCircuitBreakerDuration);
+			_breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking, options.BackplaneCircuitBreakerDuration, options.BackplaneCircuitBreakerJitterMaxDuration);
 		}
 	}
 
@@ -45,6 +45,16 @@ internal sealed partial class BackplaneAccessor
 	{
 		get { return _backplane; }
 	}
+
+	/// <summary>
+	/// Gets the current circuit breaker state for testing purposes.
+	/// </summary>
+	internal CircuitBreakerState CircuitBreakerState => _breaker.State;
+
+	/// <summary>
+	/// Gets the current failure count for testing purposes.
+	/// </summary>
+	internal int CircuitBreakerFailureCount => _breaker.CurrentFailureCount;
 
 	private void OnRemoteFailure(string operationId, string key)
 	{

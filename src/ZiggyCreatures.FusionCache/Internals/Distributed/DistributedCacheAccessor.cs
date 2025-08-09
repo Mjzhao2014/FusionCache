@@ -37,11 +37,11 @@ internal sealed partial class DistributedCacheAccessor
 		if (options.DistributedCacheCircuitBreakerFailureThreshold > 0)
 		{
 			// advanced circuit breaker
-			_breaker = new AdvancedCircuitBreaker(options.DistributedCacheCircuitBreakerFailureThreshold, options.DistributedCacheCircuitBreakerSamplingDuration, options.DistributedCacheCircuitBreakerMinimumThroughput, options.DistributedCacheCircuitBreakerDuration);
+			_breaker = new AdvancedCircuitBreaker(options.DistributedCacheCircuitBreakerFailureThreshold, options.DistributedCacheCircuitBreakerSamplingDuration, options.DistributedCacheCircuitBreakerMinimumThroughput, options.DistributedCacheCircuitBreakerDuration, options.DistributedCacheCircuitBreakerJitterMaxDuration);
 		}
 		else
 		{
-			_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking, options.DistributedCacheCircuitBreakerDuration);
+			_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking, options.DistributedCacheCircuitBreakerDuration, options.DistributedCacheCircuitBreakerJitterMaxDuration);
 		}
 
 		// WIRE FORMAT SETUP
@@ -64,6 +64,16 @@ internal sealed partial class DistributedCacheAccessor
 	{
 		get { return _cache; }
 	}
+
+	/// <summary>
+	/// Gets the current circuit breaker state for testing purposes.
+	/// </summary>
+	internal CircuitBreakerState CircuitBreakerState => _breaker.State;
+
+	/// <summary>
+	/// Gets the current failure count for testing purposes.
+	/// </summary>
+	internal int CircuitBreakerFailureCount => _breaker.CurrentFailureCount;
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private string MaybeProcessCacheKey(string key)

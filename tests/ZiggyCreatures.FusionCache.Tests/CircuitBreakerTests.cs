@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Caching.Memory;
+using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 using Xunit.Abstractions;
 using ZiggyCreatures.Caching.Fusion;
@@ -353,4 +355,128 @@ public class CircuitBreakerTests : AbstractTests
 		Assert.True(isStateChanged);
 		Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 	}
+
+	[Fact]
+	public void SimpleCircuitBreaker_JitterDurationHandlesNegativeValues()
+	{
+		// Test that negative jitter duration values work gracefully
+		var circuitBreaker1 = new SimpleCircuitBreaker(1, TimeSpan.FromMilliseconds(1000), TimeSpan.FromMilliseconds(-100));
+		var circuitBreaker2 = new SimpleCircuitBreaker(1, TimeSpan.FromMilliseconds(1000), TimeSpan.FromMilliseconds(2000));
+		
+		// Both should work without throwing exceptions
+		circuitBreaker1.RecordFailure(out _);
+		circuitBreaker2.RecordFailure(out _);
+		
+		Assert.Equal(CircuitBreakerState.Open, circuitBreaker1.State);
+		Assert.Equal(CircuitBreakerState.Open, circuitBreaker2.State);
+	}
+
+	[Fact]
+	public void AdvancedCircuitBreaker_JitterDurationHandlesNegativeValues()
+	{
+		// Test that negative jitter duration values work gracefully
+		var circuitBreaker1 = new AdvancedCircuitBreaker(0.5, TimeSpan.FromSeconds(10), 1, TimeSpan.FromMilliseconds(1000), TimeSpan.FromMilliseconds(-100));
+		var circuitBreaker2 = new AdvancedCircuitBreaker(0.5, TimeSpan.FromSeconds(10), 1, TimeSpan.FromMilliseconds(1000), TimeSpan.FromMilliseconds(2000));
+		
+		// Both should work without throwing exceptions
+		circuitBreaker1.RecordFailure(out _);
+		circuitBreaker2.RecordFailure(out _);
+		
+		Assert.Equal(CircuitBreakerState.Open, circuitBreaker1.State);
+		Assert.Equal(CircuitBreakerState.Open, circuitBreaker2.State);
+	}
+
+	[Fact]
+	public void SimpleCircuitBreaker_JitterDistributionIsReasonable()
+	{
+		// Test that jitter produces reasonable distribution of break times
+		const int iterations = 50;
+		const int breakDurationMs = 500;
+		const int jitterMs = 100; // 100ms jitter
+		var breakDuration = TimeSpan.FromMilliseconds(breakDurationMs);
+		var jitterMaxDuration = TimeSpan.FromMilliseconds(jitterMs);
+		
+		var breakTimes = new List<long>();
+		
+		for (int i = 0; i < iterations; i++)
+		{
+			var circuitBreaker = new SimpleCircuitBreaker(1, breakDuration, jitterMaxDuration);
+			var startTime = DateTimeOffset.UtcNow.Ticks;
+			
+			// Open the circuit
+			circuitBreaker.RecordFailure(out _);
+			Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
+			
+			// Busy wait until circuit allows execution
+			while (!circuitBreaker.TryExecute(out _))
+			{
+				Thread.Sleep(5);
+			}
+			
+			var elapsedTime = DateTimeOffset.UtcNow.Ticks - startTime;
+			breakTimes.Add(elapsedTime);
+		}
+		
+		var minBreakTime = breakTimes.Min();
+		var maxBreakTime = breakTimes.Max();
+		var baseBreakTicks = breakDuration.Ticks;
+		var expectedMaxJitter = jitterMaxDuration.Ticks;
+		
+		// Verify the distribution is within expected bounds
+		Assert.True(minBreakTime >= baseBreakTicks * 0.9, "Minimum break time should be close to base duration");
+		Assert.True(maxBreakTime <= baseBreakTicks + expectedMaxJitter + TimeSpan.FromMilliseconds(50).Ticks, 
+			"Maximum break time should be within jitter bounds (allowing some tolerance)");
+		
+		// Verify we got some variation (not all the same)
+		var uniqueBreakTimes = breakTimes.Distinct().Count();
+		Assert.True(uniqueBreakTimes > iterations * 0.1, "Should have reasonable variation in break times");
+	}
+
+	[Fact]
+	public void AdvancedCircuitBreaker_JitterDistributionIsReasonable()
+	{
+		// Test that jitter produces reasonable distribution of break times for advanced circuit breaker
+		const int iterations = 50;
+		const int breakDurationMs = 500;
+		const int jitterMs = 100; // 100ms jitter
+		var breakDuration = TimeSpan.FromMilliseconds(breakDurationMs);
+		var jitterMaxDuration = TimeSpan.FromMilliseconds(jitterMs);
+		
+		var breakTimes = new List<long>();
+		
+		for (int i = 0; i < iterations; i++)
+		{
+			var circuitBreaker = new AdvancedCircuitBreaker(0.5, TimeSpan.FromSeconds(10), 1, breakDuration, jitterMaxDuration);
+			var startTime = DateTimeOffset.UtcNow.Ticks;
+			
+			// Open the circuit
+			circuitBreaker.RecordFailure(out _);
+			Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
+			
+			// Busy wait until circuit allows execution
+			while (!circuitBreaker.TryExecute(out _))
+			{
+				Thread.Sleep(5);
+			}
+			
+			var elapsedTime = DateTimeOffset.UtcNow.Ticks - startTime;
+			breakTimes.Add(elapsedTime);
+		}
+		
+		var minBreakTime = breakTimes.Min();
+		var maxBreakTime = breakTimes.Max();
+		var baseBreakTicks = breakDuration.Ticks;
+		var expectedMaxJitter = jitterMaxDuration.Ticks;
+		
+		// Verify the distribution is within expected bounds
+		Assert.True(minBreakTime >= baseBreakTicks * 0.9, "Minimum break time should be close to base duration");
+		Assert.True(maxBreakTime <= baseBreakTicks + expectedMaxJitter + TimeSpan.FromMilliseconds(50).Ticks, 
+			"Maximum break time should be within jitter bounds (allowing some tolerance)");
+		
+		// Verify we got some variation (not all the same)
+		var uniqueBreakTimes = breakTimes.Distinct().Count();
+		Assert.True(uniqueBreakTimes > iterations * 0.1, "Should have reasonable variation in break times");
+	}
+
+	
 }

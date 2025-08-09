@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 
 namespace ZiggyCreatures.Caching.Fusion.Internals;
@@ -11,15 +12,18 @@ internal sealed class SimpleCircuitBreaker : IFusionCacheCircuitBreaker
 {
 	private readonly int _failuresAllowedBeforeBreaking;
 	private readonly long _breakDurationTicks;
+	private readonly long _jitterMaxDurationTicks;
+	private static readonly Random _random = new Random();
 	private int _state;
 	private int _failureCount;
 	private long _openEndTicks;
 	private int _halfOpenTrialInProgress;
 
-	public SimpleCircuitBreaker(int failuresAllowedBeforeBreaking, TimeSpan breakDuration)
+	public SimpleCircuitBreaker(int failuresAllowedBeforeBreaking, TimeSpan breakDuration, TimeSpan jitterMaxDuration = default)
 	{
 		_failuresAllowedBeforeBreaking = failuresAllowedBeforeBreaking <= 0 ? 1 : failuresAllowedBeforeBreaking;
 		_breakDurationTicks = breakDuration.Ticks;
+		_jitterMaxDurationTicks = jitterMaxDuration.Ticks;
 		_state = (int)CircuitBreakerState.Closed;
 		_failureCount = 0;
 		_openEndTicks = DateTimeOffset.MinValue.Ticks;
@@ -29,6 +33,18 @@ internal sealed class SimpleCircuitBreaker : IFusionCacheCircuitBreaker
 	public CircuitBreakerState State => (CircuitBreakerState)Volatile.Read(ref _state);
 
 	public int CurrentFailureCount => Volatile.Read(ref _failureCount);
+
+	private long ApplyJitter(long baseTicks)
+	{
+		if (_jitterMaxDurationTicks <= 0)
+			return baseTicks;
+
+		lock (_random)
+		{
+			var jitterTicks = (long)(_jitterMaxDurationTicks * _random.NextDouble());
+			return baseTicks + jitterTicks;
+		}
+	}
 
 	public bool TryExecute(out bool isStateChanged)
 	{
@@ -102,7 +118,7 @@ internal sealed class SimpleCircuitBreaker : IFusionCacheCircuitBreaker
 			if (newCount >= _failuresAllowedBeforeBreaking)
 			{
 				// open circuit
-				Interlocked.Exchange(ref _openEndTicks, nowTicks + _breakDurationTicks);
+				Interlocked.Exchange(ref _openEndTicks, nowTicks + ApplyJitter(_breakDurationTicks));
 				Interlocked.Exchange(ref _halfOpenTrialInProgress, 0);
 				var prev = Interlocked.Exchange(ref _state, (int)CircuitBreakerState.Open);
 				isStateChanged = prev != (int)CircuitBreakerState.Open;
@@ -112,7 +128,7 @@ internal sealed class SimpleCircuitBreaker : IFusionCacheCircuitBreaker
 		if (current == CircuitBreakerState.HalfOpen)
 		{
 			// trial call failed: open again
-			Interlocked.Exchange(ref _openEndTicks, nowTicks + _breakDurationTicks);
+			Interlocked.Exchange(ref _openEndTicks, nowTicks + ApplyJitter(_breakDurationTicks));
 			Interlocked.Exchange(ref _halfOpenTrialInProgress, 0);
 			var prev = Interlocked.Exchange(ref _state, (int)CircuitBreakerState.Open);
 			isStateChanged = prev != (int)CircuitBreakerState.Open;

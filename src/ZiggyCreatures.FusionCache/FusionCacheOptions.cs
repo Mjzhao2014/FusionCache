@@ -217,6 +217,15 @@ public class FusionCacheOptions
 	public int DistributedCacheCircuitBreakerMinimumThroughput { get; set; }
 
 	/// <summary>
+	/// The maximum amount of extra duration to add to the circuit breaker break duration in a randomized way, to allow for more variable circuit breaker recovery times.
+	/// <br/>
+	/// This may be useful in a horizontal scalable scenario (eg: multi-node scenario) to avoid the thundering herd problem.
+	/// <br/><br/>
+	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
+	/// </summary>
+	public TimeSpan DistributedCacheCircuitBreakerJitterMaxDuration { get; set; }
+
+	/// <summary>
 	/// Execute event handlers in a sync fashion, waiting for all of them to complete before moving on.
 	/// <br/><br/>
 	/// <strong>WARNING:</strong> by default this option is NOT enabled, and should remain this way in any normal circumstance unless you really know what you are doing.
@@ -269,6 +278,15 @@ public class FusionCacheOptions
 	/// The minimum number of calls that must occur for the advanced circuit breaker on the backplane to evaluate the failure rate.
 	/// </summary>
 	public int BackplaneCircuitBreakerMinimumThroughput { get; set; }
+
+	/// <summary>
+	/// The maximum amount of extra duration to add to the circuit breaker break duration in a randomized way, to allow for more variable circuit breaker recovery times.
+	/// <br/>
+	/// This may be useful in a horizontal scalable scenario (eg: multi-node scenario) to avoid the thundering herd problem.
+	/// <br/><br/>
+	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Backplane.md"/>
+	/// </summary>
+	public TimeSpan BackplaneCircuitBreakerJitterMaxDuration { get; set; }
 
 	/// <summary>
 	/// The prefix to use in the backplane channel name: if not specified the <see cref="CacheName"/> will be used.
@@ -606,6 +624,7 @@ public class FusionCacheOptions
 		BackplaneCircuitBreakerFailureThreshold = BackplaneCircuitBreakerFailureThreshold,
 		BackplaneCircuitBreakerSamplingDuration = BackplaneCircuitBreakerSamplingDuration,
 		BackplaneCircuitBreakerMinimumThroughput = BackplaneCircuitBreakerMinimumThroughput,
+		BackplaneCircuitBreakerJitterMaxDuration = BackplaneCircuitBreakerJitterMaxDuration,
 			WaitForInitialBackplaneSubscribe = WaitForInitialBackplaneSubscribe,
 
 		DistributedCacheKeyModifierMode = DistributedCacheKeyModifierMode,
@@ -614,6 +633,7 @@ public class FusionCacheOptions
 		DistributedCacheCircuitBreakerFailureThreshold = DistributedCacheCircuitBreakerFailureThreshold,
 		DistributedCacheCircuitBreakerSamplingDuration = DistributedCacheCircuitBreakerSamplingDuration,
 		DistributedCacheCircuitBreakerMinimumThroughput = DistributedCacheCircuitBreakerMinimumThroughput,
+		DistributedCacheCircuitBreakerJitterMaxDuration = DistributedCacheCircuitBreakerJitterMaxDuration,
 
 			EnableSyncEventHandlersExecution = EnableSyncEventHandlersExecution,
 

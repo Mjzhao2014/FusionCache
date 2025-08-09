@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 
 namespace ZiggyCreatures.Caching.Fusion.Internals;
@@ -14,6 +15,8 @@ internal sealed class AdvancedCircuitBreaker : IFusionCacheCircuitBreaker
 	private readonly long _samplingDurationTicks;
 	private readonly int _minimumThroughput;
 	private readonly long _breakDurationTicks;
+	private readonly long _jitterMaxDurationTicks;
+	private static readonly Random _random = new Random();
 
 	private int _state;
 	private int _callCount;
@@ -22,12 +25,18 @@ internal sealed class AdvancedCircuitBreaker : IFusionCacheCircuitBreaker
 	private long _openEndTicks;
 	private int _halfOpenTrialInProgress;
 
-	public AdvancedCircuitBreaker(double failureThreshold, TimeSpan samplingDuration, int minimumThroughput, TimeSpan breakDuration)
+	public AdvancedCircuitBreaker(double failureThreshold, TimeSpan samplingDuration, int minimumThroughput, TimeSpan breakDuration, TimeSpan jitterMaxDuration = default)
 	{
+		if (failureThreshold <= 0.0 || failureThreshold > 1.0)
+			throw new ArgumentOutOfRangeException(nameof(failureThreshold), "Failure threshold must be between 0 (exclusive) and 1 (inclusive)");
+		if (minimumThroughput <= 0)
+			throw new ArgumentOutOfRangeException(nameof(minimumThroughput), "Minimum throughput must be greater than 0");
+
 		_failureThreshold = failureThreshold;
 		_samplingDurationTicks = samplingDuration.Ticks;
-		_minimumThroughput = minimumThroughput < 0 ? 0 : minimumThroughput;
+		_minimumThroughput = minimumThroughput;
 		_breakDurationTicks = breakDuration.Ticks;
+		_jitterMaxDurationTicks = jitterMaxDuration.Ticks;
 		_state = (int)CircuitBreakerState.Closed;
 		_callCount = 0;
 		_failureCount = 0;
@@ -39,6 +48,18 @@ internal sealed class AdvancedCircuitBreaker : IFusionCacheCircuitBreaker
 	public CircuitBreakerState State => (CircuitBreakerState)Volatile.Read(ref _state);
 
 	public int CurrentFailureCount => Volatile.Read(ref _failureCount);
+
+	private long ApplyJitter(long baseTicks)
+	{
+		if (_jitterMaxDurationTicks <= 0)
+			return baseTicks;
+
+		lock (_random)
+		{
+			var jitterTicks = (long)(_jitterMaxDurationTicks * _random.NextDouble());
+			return baseTicks + jitterTicks;
+		}
+	}
 
 	private void ResetIfWindowExpired(long nowTicks)
 	{
@@ -132,7 +153,7 @@ internal sealed class AdvancedCircuitBreaker : IFusionCacheCircuitBreaker
 				var failureRate = (double)failures / total;
 				if (failureRate >= _failureThreshold)
 				{
-					Interlocked.Exchange(ref _openEndTicks, nowTicks + _breakDurationTicks);
+					Interlocked.Exchange(ref _openEndTicks, nowTicks + ApplyJitter(_breakDurationTicks));
 					Interlocked.Exchange(ref _halfOpenTrialInProgress, 0);
 					var prev = Interlocked.Exchange(ref _state, (int)CircuitBreakerState.Open);
 					isStateChanged = prev != (int)CircuitBreakerState.Open;
@@ -143,7 +164,7 @@ internal sealed class AdvancedCircuitBreaker : IFusionCacheCircuitBreaker
 		if (current == CircuitBreakerState.HalfOpen)
 		{
 			// trial call failed -> open again
-			Interlocked.Exchange(ref _openEndTicks, nowTicks + _breakDurationTicks);
+			Interlocked.Exchange(ref _openEndTicks, nowTicks + ApplyJitter(_breakDurationTicks));
 			Interlocked.Exchange(ref _halfOpenTrialInProgress, 0);
 			var prev = Interlocked.Exchange(ref _state, (int)CircuitBreakerState.Open);
 			isStateChanged = prev != (int)CircuitBreakerState.Open;
