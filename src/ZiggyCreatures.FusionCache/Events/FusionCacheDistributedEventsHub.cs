@@ -37,12 +37,13 @@ public sealed class FusionCacheDistributedEventsHub
 	/// </summary>
 	public event EventHandler<FusionCacheEntryEventArgs>? DeserializationError;
 
-	internal void OnCircuitBreakerChange(string? operationId, string? key, bool isClosed)
+	internal void OnCircuitBreakerChange(string? operationId, string? key, CircuitBreakerState state)
 	{
 		// METRIC
+		var isClosed = state == CircuitBreakerState.Closed;
 		Metrics.CounterDistributedCircuitBreakerChange.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.DistributedCircuitBreakerClosed, isClosed));
 
-		CircuitBreakerChange?.SafeExecute(operationId, key, _cache, new FusionCacheCircuitBreakerChangeEventArgs(isClosed), nameof(CircuitBreakerChange), _logger, _errorsLogLevel, _syncExecution);
+		CircuitBreakerChange?.SafeExecute(operationId, key, _cache, new FusionCacheCircuitBreakerChangeEventArgs(operationId, key, state), nameof(CircuitBreakerChange), _logger, _errorsLogLevel, _syncExecution);
 	}
 
 	internal void OnSerializationError(string? operationId, string? key)

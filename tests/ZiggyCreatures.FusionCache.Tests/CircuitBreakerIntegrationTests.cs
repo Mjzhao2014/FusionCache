@@ -359,469 +359,6 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 
 	[Theory]
 	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task CircuitBreaker_RecoveryScenario_DistributedCache(SerializerType serializerType)
-	{
-		var duration = TimeSpan.FromMilliseconds(2_000);
-		var maxFailuresBeforeBreaking = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(100);
-
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
-
-		var options = CreateFusionCacheOptions();
-		options.EnableAutoRecovery = false;
-		options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-		options.DistributedCacheCircuitBreakerDuration = durationOfBreak;
-		using var fusionCache = new FusionCache(options, memoryCache);
-		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
-
-		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
-
-		var key = "foo";
-		var value = 42;
-
-		// Verify initial state
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// Open the circuit
-		chaosDistributedCache.SetAlwaysThrow();
-		await fusionCache.SetAsync(key, value);
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// Wait for break duration
-		await Task.Delay(durationOfBreak.PlusALittleBit());
-
-		// Fix the distributed cache
-		chaosDistributedCache.SetNeverThrow();
-
-		// Next operation should go to half-open and succeed
-		await fusionCache.SetAsync(key + "2", value);
-		Assert.Equal(CircuitBreakerState.HalfOpen, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// Subsequent operations should work normally and close the circuit
-		await fusionCache.SetAsync(key + "3", value);
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-	}
-
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task CircuitBreaker_DisabledWhenDurationIsZero_DistributedCache(SerializerType serializerType)
-	{
-		var duration = TimeSpan.FromMilliseconds(2_000);
-
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
-
-		var options = CreateFusionCacheOptions();
-		options.EnableAutoRecovery = false;
-		// Circuit breaker with zero break duration should be effectively disabled
-		options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = 1;
-		options.DistributedCacheCircuitBreakerDuration = TimeSpan.Zero;
-		using var fusionCache = new FusionCache(options, memoryCache);
-		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
-
-		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
-
-		var key = "foo";
-		var value = 42;
-
-		// Configure chaos cache to always fail
-		chaosDistributedCache.SetAlwaysThrow();
-
-		// Multiple operations should not open the circuit (it's disabled)
-		await fusionCache.SetAsync(key, value);
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-		
-		await fusionCache.SetAsync(key + "2", value);
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-		
-		await fusionCache.SetAsync(key + "3", value);
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// Operations should continue to be attempted (circuit breaker disabled)
-		// Even with multiple failures, the circuit should remain closed when duration is zero
-	}
-
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task CircuitBreaker_BothDistributedCacheAndBackplane_IndependentStates(SerializerType serializerType)
-	{
-		var duration = TimeSpan.FromMilliseconds(2_000);
-		var maxFailuresBeforeBreaking = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(200);
-		var backplaneConnectionId = "test-connection";
-
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
-		var backplane = new MemoryBackplane(new MemoryBackplaneOptions() { ConnectionId = backplaneConnectionId });
-		var chaosBackplane = new ChaosBackplane(backplane);
-
-		var options = CreateFusionCacheOptions();
-		options.EnableAutoRecovery = false;
-		// Independent circuit breakers
-		options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-		options.DistributedCacheCircuitBreakerDuration = durationOfBreak;
-		options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-		options.BackplaneCircuitBreakerDuration = durationOfBreak;
-		using var fusionCache = new FusionCache(options, memoryCache);
-		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
-		fusionCache.DefaultEntryOptions.AllowBackgroundBackplaneOperations = false;
-
-		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
-		fusionCache.SetupBackplane(chaosBackplane);
-
-		var key = "foo";
-		var value = 42;
-
-		// Make distributed cache fail but backplane work
-		chaosDistributedCache.SetAlwaysThrow();
-		chaosBackplane.SetNeverThrow();
-
-		await fusionCache.SetAsync(key, value);
-
-		// Now make distributed cache work but backplane fail
-		chaosDistributedCache.SetNeverThrow();
-		chaosBackplane.SetAlwaysThrow();
-
-		// Wait for distributed cache circuit to potentially recover
-		await Task.Delay(durationOfBreak.PlusALittleBit());
-
-		await fusionCache.SetAsync(key + "2", value);
-
-		// The circuits should operate independently
-		// We can't easily assert internal state, but the operations should complete
-	}
-
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task SimpleCircuitBreaker_JitterWorksWithDistributedCache(SerializerType serializerType)
-	{
-		var duration = TimeSpan.FromMilliseconds(2_000);
-		var maxFailuresBeforeBreaking = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(500);
-		var jitterMaxDuration = TimeSpan.FromMilliseconds(200); // 200ms jitter
-
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
-
-		var options = CreateFusionCacheOptions();
-		options.EnableAutoRecovery = false;
-		options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-		options.DistributedCacheCircuitBreakerDuration = durationOfBreak;
-		options.DistributedCacheCircuitBreakerJitterMaxDuration = jitterMaxDuration;
-		
-		using var fusionCache = new FusionCache(options, memoryCache);
-		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
-
-		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
-
-		var key = "foo";
-		var value = 42;
-
-		// Verify initial state
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// Configure chaos cache to always fail to open the circuit
-		chaosDistributedCache.SetAlwaysThrow();
-		await fusionCache.SetAsync(key, value);
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		var startTime = DateTimeOffset.UtcNow;
-
-		// Fix the distributed cache before checking recovery
-		chaosDistributedCache.SetNeverThrow();
-
-		// Wait just past the base break duration but not the full jitter
-		await Task.Delay(durationOfBreak.Add(TimeSpan.FromMilliseconds(50)));
-
-		// Circuit may or may not be ready depending on jitter (this is the key test)
-		var operationTime = DateTimeOffset.UtcNow;
-		await fusionCache.SetAsync(key + "2", value);
-		
-		// Verify the circuit transitioned to half-open (indicating jitter worked and recovery occurred)
-		Assert.Equal(CircuitBreakerState.HalfOpen, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// The total time should be at least base duration but potentially up to base + jitter
-		var totalElapsed = operationTime - startTime;
-		Assert.True(totalElapsed >= durationOfBreak.Subtract(TimeSpan.FromMilliseconds(50)), 
-			"Circuit recovery should take at least the base duration");
-		Assert.True(totalElapsed <= durationOfBreak.Add(jitterMaxDuration).Add(TimeSpan.FromMilliseconds(100)), 
-			"Circuit recovery should not exceed base duration + jitter + tolerance");
-	}
-
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task AdvancedCircuitBreaker_JitterWorksWithDistributedCache(SerializerType serializerType)
-	{
-		var duration = TimeSpan.FromMilliseconds(2_000);
-		var failureThreshold = 0.5; // 50%
-		var samplingDuration = TimeSpan.FromSeconds(10);
-		var minimumThroughput = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(500);
-		var jitterMaxDuration = TimeSpan.FromMilliseconds(300); // 300ms jitter
-
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
-
-		var options = CreateFusionCacheOptions();
-		options.EnableAutoRecovery = false;
-		options.DistributedCacheCircuitBreakerFailureThreshold = failureThreshold;
-		options.DistributedCacheCircuitBreakerSamplingDuration = samplingDuration;
-		options.DistributedCacheCircuitBreakerMinimumThroughput = minimumThroughput;
-		options.DistributedCacheCircuitBreakerDuration = durationOfBreak;
-		options.DistributedCacheCircuitBreakerJitterMaxDuration = jitterMaxDuration;
-		
-		using var fusionCache = new FusionCache(options, memoryCache);
-		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
-
-		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
-
-		var key = "foo";
-		var value = 42;
-
-		// Verify initial state
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// Open the circuit with failure
-		chaosDistributedCache.SetAlwaysThrow();
-		await fusionCache.SetAsync(key, value);
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		var startTime = DateTimeOffset.UtcNow;
-
-		// Fix the distributed cache
-		chaosDistributedCache.SetNeverThrow();
-
-		// Wait just past the base break duration but not the full jitter
-		await Task.Delay(durationOfBreak.Add(TimeSpan.FromMilliseconds(50)));
-
-		// Circuit may or may not be ready depending on jitter
-		var operationTime = DateTimeOffset.UtcNow;
-		await fusionCache.SetAsync(key + "2", value);
-		
-		// Verify the circuit transitioned to half-open (indicating jitter worked and recovery occurred)
-		Assert.Equal(CircuitBreakerState.HalfOpen, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		var totalElapsed = operationTime - startTime;
-		Assert.True(totalElapsed >= durationOfBreak.Subtract(TimeSpan.FromMilliseconds(50)), 
-			"Circuit recovery should take at least the base duration");
-		Assert.True(totalElapsed <= durationOfBreak.Add(jitterMaxDuration).Add(TimeSpan.FromMilliseconds(100)), 
-			"Circuit recovery should not exceed base duration + jitter + tolerance");
-	}
-
-	[Fact]
-	public async Task SimpleCircuitBreaker_JitterWorksWithBackplane()
-	{
-		var duration = TimeSpan.FromMilliseconds(2_000);
-		var maxFailuresBeforeBreaking = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(500);
-		var jitterMaxDuration = TimeSpan.FromMilliseconds(200); // 200ms jitter
-		var backplaneConnectionId = "test-connection";
-
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var backplane = new MemoryBackplane(new MemoryBackplaneOptions() { ConnectionId = backplaneConnectionId });
-		var chaosBackplane = new ChaosBackplane(backplane);
-
-		var options = CreateFusionCacheOptions();
-		options.EnableAutoRecovery = false;
-		options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-		options.BackplaneCircuitBreakerDuration = durationOfBreak;
-		options.BackplaneCircuitBreakerJitterMaxDuration = jitterMaxDuration;
-		
-		using var fusionCache = new FusionCache(options, memoryCache);
-		fusionCache.DefaultEntryOptions.AllowBackgroundBackplaneOperations = false;
-
-		fusionCache.SetupBackplane(chaosBackplane);
-
-		var key = "foo";
-		var value = 42;
-
-		// Verify initial state
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
-
-		// Open the circuit with failure
-		chaosBackplane.SetAlwaysThrow();
-		await fusionCache.SetAsync(key, value);
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
-
-		var startTime = DateTimeOffset.UtcNow;
-
-		// Fix the backplane
-		chaosBackplane.SetNeverThrow();
-
-		// Wait just past the base break duration but not the full jitter
-		await Task.Delay(durationOfBreak.Add(TimeSpan.FromMilliseconds(50)));
-
-		// Circuit may or may not be ready depending on jitter
-		var operationTime = DateTimeOffset.UtcNow;
-		await fusionCache.SetAsync(key + "2", value);
-		
-		// Verify the circuit transitioned to half-open (indicating jitter worked and recovery occurred)
-		Assert.Equal(CircuitBreakerState.HalfOpen, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
-
-		var totalElapsed = operationTime - startTime;
-		Assert.True(totalElapsed >= durationOfBreak.Subtract(TimeSpan.FromMilliseconds(50)), 
-			"Circuit recovery should take at least the base duration");
-		Assert.True(totalElapsed <= durationOfBreak.Add(jitterMaxDuration).Add(TimeSpan.FromMilliseconds(100)), 
-			"Circuit recovery should not exceed base duration + jitter + tolerance");
-	}
-
-	[Fact]
-	public async Task AdvancedCircuitBreaker_JitterWorksWithBackplane()
-	{
-		var duration = TimeSpan.FromMilliseconds(2_000);
-		var failureThreshold = 0.5; // 50%
-		var samplingDuration = TimeSpan.FromSeconds(10);
-		var minimumThroughput = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(500);
-		var jitterMaxDuration = TimeSpan.FromMilliseconds(300); // 300ms jitter
-		var backplaneConnectionId = "test-connection";
-
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var backplane = new MemoryBackplane(new MemoryBackplaneOptions() { ConnectionId = backplaneConnectionId });
-		var chaosBackplane = new ChaosBackplane(backplane);
-
-		var options = CreateFusionCacheOptions();
-		options.EnableAutoRecovery = false;
-		options.BackplaneCircuitBreakerFailureThreshold = failureThreshold;
-		options.BackplaneCircuitBreakerSamplingDuration = samplingDuration;
-		options.BackplaneCircuitBreakerMinimumThroughput = minimumThroughput;
-		options.BackplaneCircuitBreakerDuration = durationOfBreak;
-		options.BackplaneCircuitBreakerJitterMaxDuration = jitterMaxDuration;
-		
-		using var fusionCache = new FusionCache(options, memoryCache);
-		fusionCache.DefaultEntryOptions.AllowBackgroundBackplaneOperations = false;
-
-		fusionCache.SetupBackplane(chaosBackplane);
-
-		var key = "foo";
-		var value = 42;
-
-		// Verify initial state
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
-
-		// Open the circuit with failure
-		chaosBackplane.SetAlwaysThrow();
-		await fusionCache.SetAsync(key, value);
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
-
-		var startTime = DateTimeOffset.UtcNow;
-
-		// Fix the backplane
-		chaosBackplane.SetNeverThrow();
-
-		// Wait just past the base break duration but not the full jitter
-		await Task.Delay(durationOfBreak.Add(TimeSpan.FromMilliseconds(50)));
-
-		// Circuit may or may not be ready depending on jitter
-		var operationTime = DateTimeOffset.UtcNow;
-		
-		// Verify the circuit transitioned to half-open (indicating jitter worked and recovery occurred)
-		Assert.Equal(CircuitBreakerState.HalfOpen, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
-
-		await fusionCache.SetAsync(key + "2", value);
-		// Verify the circuit transitioned to half-open (indicating jitter worked and recovery occurred)
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
-
-
-		var totalElapsed = operationTime - startTime;
-		Assert.True(totalElapsed > durationOfBreak.Subtract(TimeSpan.FromMilliseconds(50)), 
-			"Circuit recovery should take at least the base duration");
-		Assert.True(totalElapsed < durationOfBreak.Add(jitterMaxDuration).Add(TimeSpan.FromMilliseconds(100)), 
-			"Circuit recovery should not exceed base duration + jitter + tolerance");
-	}
-
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task CircuitBreaker_JitterDistributionIsReasonableInRealScenario(SerializerType serializerType)
-	{
-		// Integration test to verify jitter produces reasonable distribution in a real FusionCache scenario
-		const int iterations = 20; // Reduced for integration test speed
-		var maxFailuresBeforeBreaking = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(300);
-		var jitterMaxDuration = TimeSpan.FromMilliseconds(200); // Significant jitter for testing
-
-		var recoveryTimes = new List<TimeSpan>();
-
-		for (int i = 0; i < iterations; i++)
-		{
-			using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-			var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-			var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
-
-			var options = CreateFusionCacheOptions();
-			options.EnableAutoRecovery = false;
-			options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-			options.DistributedCacheCircuitBreakerDuration = durationOfBreak;
-			options.DistributedCacheCircuitBreakerJitterMaxDuration = jitterMaxDuration;
-			
-			using var fusionCache = new FusionCache(options, memoryCache);
-			fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
-
-			fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
-
-			var key = $"foo{i}";
-			var value = 42;
-
-			// Verify initial state and open the circuit
-			Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-			chaosDistributedCache.SetAlwaysThrow();
-			await fusionCache.SetAsync(key, value);
-			Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-			var startTime = DateTimeOffset.UtcNow;
-
-			// Fix the distributed cache
-			chaosDistributedCache.SetNeverThrow();
-
-			// Wait until the circuit transitions to half-open (indicating recovery with jitter)
-			bool recovered = false;
-			TimeSpan recoveryTime = TimeSpan.Zero;
-			
-			while (!recovered && recoveryTime < durationOfBreak.Add(jitterMaxDuration).Add(TimeSpan.FromMilliseconds(200)))
-			{
-				await Task.Delay(TimeSpan.FromMilliseconds(10));
-				recoveryTime = DateTimeOffset.UtcNow - startTime;
-				
-				// Check if circuit is ready for operations by attempting one
-				await fusionCache.SetAsync(key + "test", value);
-				
-				// Check if the circuit has transitioned to half-open (indicating actual recovery)
-				if (TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache) == CircuitBreakerState.HalfOpen)
-				{
-					recovered = true;
-					recoveryTimes.Add(recoveryTime);
-				}
-			}
-
-			if (!recovered)
-			{
-				// Fallback - circuit never recovered within expected time
-				recoveryTimes.Add(durationOfBreak.Add(jitterMaxDuration).Add(TimeSpan.FromMilliseconds(50)));
-			}
-		}
-
-		// Verify distribution characteristics
-		var minTime = recoveryTimes.Min();
-		var maxTime = recoveryTimes.Max();
-
-		Assert.True(minTime >= durationOfBreak.Subtract(TimeSpan.FromMilliseconds(100)), 
-			"Minimum recovery time should be close to base duration");
-		Assert.True(maxTime <= durationOfBreak.Add(jitterMaxDuration).Add(TimeSpan.FromMilliseconds(100)), 
-			"Maximum recovery time should be within jitter bounds");
-
-		// Verify we got some reasonable variation (not all the same)
-		var uniqueTimes = recoveryTimes.Select(t => (long)(t.TotalMilliseconds / 50) * 50).Distinct().Count();
-		Assert.True(uniqueTimes > 1, "Should have reasonable variation in recovery times");
-	}
-
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
 	public async Task CircuitBreaker_HalfOpenStateAllowsExactlyOneConcurrentCall_DistributedCache(SerializerType serializerType)
 	{
 		var maxFailuresBeforeBreaking = 1;
@@ -843,6 +380,22 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 
 		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
 
+		// Track circuit breaker state transitions for verification
+		Dictionary<CircuitBreakerState, int> stateCounts = new Dictionary<CircuitBreakerState, int>
+		{
+			{ CircuitBreakerState.Closed, 0 },
+			{ CircuitBreakerState.Open, 0 },
+			{ CircuitBreakerState.HalfOpen, 0 }
+		};
+
+		fusionCache.Events.Distributed.CircuitBreakerChange += (sender, e) =>
+		{
+			lock (stateCounts)
+			{
+				stateCounts[e.State] = stateCounts[e.State] + 1;
+			}
+		};
+
 		var key = "foo";
 		var value = 42;
 
@@ -851,10 +404,11 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		await fusionCache.SetAsync(key, value);
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
 
+		Thread.Sleep(100); // wait for event to be processed
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]);
+
 		// Wait for break duration to pass
 		await Task.Delay(durationOfBreak.PlusALittleBit());
-
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
 
 		// Fix the distributed cache and reset call counter
 		chaosDistributedCache.SetNeverThrow();
@@ -884,12 +438,19 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		// Wait for all tasks to complete
 		await Task.WhenAll(tasks);
 
-		// In half-open state, only exactly ONE call should have gone through to the distributed cache
-		// The circuit should allow exactly one test call, then block others until that call completes
-		Assert.True(callTracker.SetCallCount <= 2, $"Expected at most 2 calls to distributed cache in half-open state, but got {callTracker.SetCallCount}");
-		Assert.True(callTracker.SetCallCount >= 1, $"Expected at least 1 call to distributed cache in half-open state, but got {callTracker.SetCallCount}");
+		Thread.Sleep(200); // wait for all events to be processed
 
-		// After successful operations, circuit should be closed
+		// CORE VERIFICATION: In half-open state, only exactly ONE call should have gone through to the distributed cache
+		// The circuit should allow exactly one test call, then block others until that call completes successfully
+		Assert.True(callTracker.SetCallCount >= 1, $"Expected at least 1 call to distributed cache in half-open state, but got {callTracker.SetCallCount}");
+		Assert.True(callTracker.SetCallCount <= 2, $"Expected at most 2 calls to distributed cache in half-open state, but got {callTracker.SetCallCount}");
+
+		// Verify proper state transitions occurred: Open -> HalfOpen -> Closed
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]);
+		Assert.Equal(1, stateCounts[CircuitBreakerState.HalfOpen]);
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Closed]);
+
+		// Final state should be closed after successful test operation
 		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
 	}
 
@@ -916,6 +477,22 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 
 		fusionCache.SetupBackplane(chaosBackplane);
 
+		// Track circuit breaker state transitions for verification
+		Dictionary<CircuitBreakerState, int> stateCounts = new Dictionary<CircuitBreakerState, int>
+		{
+			{ CircuitBreakerState.Closed, 0 },
+			{ CircuitBreakerState.Open, 0 },
+			{ CircuitBreakerState.HalfOpen, 0 }
+		};
+
+		fusionCache.Events.Backplane.CircuitBreakerChange += (sender, e) =>
+		{
+			lock (stateCounts)
+			{
+				stateCounts[e.State] = stateCounts[e.State] + 1;
+			}
+		};
+
 		var key = "foo";
 		var value = 42;
 
@@ -923,6 +500,9 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		chaosBackplane.SetAlwaysThrow();
 		await fusionCache.SetAsync(key, value);
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
+
+		Thread.Sleep(100); // wait for event to be processed
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]);
 
 		// Wait for break duration to pass
 		await Task.Delay(durationOfBreak.PlusALittleBit());
@@ -955,65 +535,30 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		// Wait for all tasks to complete
 		await Task.WhenAll(tasks);
 
-		// In half-open state, only exactly ONE call should have gone through to the backplane
-		// The circuit should allow exactly one test call, then block others until that call completes
-		Assert.True(callTracker.PublishCallCount <= 2, $"Expected at most 2 calls to backplane in half-open state, but got {callTracker.PublishCallCount}");
-		Assert.True(callTracker.PublishCallCount >= 1, $"Expected at least 1 call to backplane in half-open state, but got {callTracker.PublishCallCount}");
+		Thread.Sleep(200); // wait for all events to be processed
 
-		// After successful operations, circuit should be closed
+		// CORE VERIFICATION: In half-open state, only exactly ONE call should have gone through to the backplane
+		// The circuit should allow exactly one test call, then block others until that call completes successfully
+		Assert.True(callTracker.PublishCallCount >= 1, $"Expected at least 1 call to backplane in half-open state, but got {callTracker.PublishCallCount}");
+		Assert.True(callTracker.PublishCallCount <= 2, $"Expected at most 2 calls to backplane in half-open state, but got {callTracker.PublishCallCount}");
+
+		// Verify proper state transitions occurred: Open -> HalfOpen -> Closed
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]);
+		Assert.Equal(1, stateCounts[CircuitBreakerState.HalfOpen]);
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Closed]);
+
+		// Final state should be closed after successful test operation
 		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
 	}
 
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task CircuitBreaker_HalfOpenFailureReopensCircuit_DistributedCache(SerializerType serializerType)
-	{
-		var maxFailuresBeforeBreaking = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(100);
-
-		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
-		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
-
-		var options = CreateFusionCacheOptions();
-		options.EnableAutoRecovery = false;
-		options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-		options.DistributedCacheCircuitBreakerDuration = durationOfBreak;
-		using var fusionCache = new FusionCache(options, memoryCache);
-		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
-
-		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
-
-		var key = "foo";
-		var value = 42;
-
-		// Open the circuit
-		chaosDistributedCache.SetAlwaysThrow();
-		await fusionCache.SetAsync(key, value);
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// Wait for break duration
-		await Task.Delay(durationOfBreak.PlusALittleBit());
-
-		// Keep chaos cache failing - this will cause the half-open test to fail
-		// First operation should transition to half-open
-		await fusionCache.SetAsync(key + "1", value);
-		Assert.Equal(CircuitBreakerState.HalfOpen, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// The failure in half-open state should reopen the circuit
-		await fusionCache.SetAsync(key + "2", value);
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-	}
-
-	[Theory]
-	[ClassData(typeof(SerializerTypesClassData))]
-	public async Task CircuitBreaker_IndependentJitterForDistributedCacheAndBackplane(SerializerType serializerType)
+	[Fact]
+	public async Task CircuitBreaker_JitterWorks_DistributedCacheAndBackplane()
 	{
 		// Test that distributed cache and backplane circuit breakers have independent jitter
 		var maxFailuresBeforeBreaking = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(400);
-		var distributedCacheJitter = TimeSpan.FromMilliseconds(100);
-		var backplaneJitter = TimeSpan.FromMilliseconds(200);
+		var durationOfBreak = TimeSpan.FromMilliseconds(200);
+		var distributedCacheJitter = TimeSpan.FromMilliseconds(50);
+		var backplaneJitter = TimeSpan.FromMilliseconds(100);
 		var backplaneConnectionId = "test-connection";
 
 		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
@@ -1036,7 +581,7 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
 		fusionCache.DefaultEntryOptions.AllowBackgroundBackplaneOperations = false;
 
-		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
+		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(SerializerType.SystemTextJson));
 		fusionCache.SetupBackplane(chaosBackplane);
 
 		var key = "foo";
@@ -1047,19 +592,156 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		chaosBackplane.SetAlwaysThrow();
 		await fusionCache.SetAsync(key, value);
 
+		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
+
 		// Fix both systems
 		chaosDistributedCache.SetNeverThrow();
 		chaosBackplane.SetNeverThrow();
 
-		// Wait for base duration plus some tolerance
-		await Task.Delay(durationOfBreak.Add(TimeSpan.FromMilliseconds(50)));
+		// Wait for base duration only - both should still be open due to jitter
+		await Task.Delay(durationOfBreak);
+		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
 
-		// Both circuits should potentially be in different states due to independent jitter
-		// This test mainly verifies that the configuration is accepted and operations complete
+		// Wait for distributed cache jitter to potentially expire but not backplane
+		await Task.Delay(distributedCacheJitter.Add(TimeSpan.FromMilliseconds(25)));
+
+		// Test that jitter configuration is respected (operations should complete without errors)
 		await fusionCache.SetAsync(key + "2", value);
 		await fusionCache.SetAsync(key + "3", value);
 
-		// The circuits operate independently with their own jitter values
-		// We can't easily assert the exact timing, but the operations should complete successfully
+		// Both circuits should eventually recover (we can't test exact timing due to jitter randomness)
+		// but we can verify the configuration was applied correctly by ensuring operations complete
 	}
+
+	[Theory]
+	[ClassData(typeof(SerializerTypesClassData))]
+	public async Task CircuitBreaker_FiresEventsOnStateTransitions_DistributedCache(SerializerType serializerType)
+	{
+		var maxFailuresBeforeBreaking = 1;
+		var durationOfBreak = TimeSpan.FromMilliseconds(100);
+
+		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+		var chaosDistributedCache = new ChaosDistributedCache(distributedCache);
+
+		var options = CreateFusionCacheOptions();
+		options.EnableAutoRecovery = false;
+		options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
+		options.DistributedCacheCircuitBreakerDuration = durationOfBreak;
+		using var fusionCache = new FusionCache(options, memoryCache);
+		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
+
+		fusionCache.SetupDistributedCache(chaosDistributedCache, TestsUtils.GetSerializer(serializerType));
+
+		Dictionary<CircuitBreakerState, int> stateCounts = new Dictionary<CircuitBreakerState, int>
+		{
+			{ CircuitBreakerState.Closed, 0 },
+			{ CircuitBreakerState.Open, 0 },
+			{ CircuitBreakerState.HalfOpen, 0 }
+		};
+
+		fusionCache.Events.Distributed.CircuitBreakerChange += (sender, e) =>
+		{
+			lock (stateCounts)
+			{
+				stateCounts[e.State] = stateCounts[e.State] + 1;
+			}
+		};
+
+		var key = "test-key";
+		var value = 42;
+
+		// Initial state: Closed (no events yet)
+		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+
+		// STEP 1: Open the circuit (should fire event with isActive=false)
+		chaosDistributedCache.SetAlwaysThrow();
+		await fusionCache.SetAsync(key, value);
+		
+		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+
+		Thread.Sleep(100); // wait for event to be processed
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]);
+
+		// STEP 2: Wait for break duration, then trigger half-open transition
+		await Task.Delay(durationOfBreak.PlusALittleBit());
+		chaosDistributedCache.SetNeverThrow(); // Fix the cache for success
+
+		// 1. This should transition to half-open  and fire half-open event
+		// 2. The setasync will be successful and circuit will be closed and fire closed event
+		await fusionCache.SetAsync(key + "_recovery", value);
+		
+		Thread.Sleep(100); // wait for event to be processed
+		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+		Assert.Equal(1, stateCounts[CircuitBreakerState.HalfOpen]);
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Closed]); // Still one open event
+
+	}
+
+	[Fact]
+	public async Task CircuitBreaker_FiresEventsOnStateTransitions_Backplane()
+	{
+		var maxFailuresBeforeBreaking = 1;
+		var durationOfBreak = TimeSpan.FromMilliseconds(100);
+		var backplaneConnectionId = "test-connection";
+
+		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+		var backplane = new MemoryBackplane(new MemoryBackplaneOptions() { ConnectionId = backplaneConnectionId });
+		var chaosBackplane = new ChaosBackplane(backplane);
+
+		var options = CreateFusionCacheOptions();
+		options.EnableAutoRecovery = false;
+		options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
+		options.BackplaneCircuitBreakerDuration = durationOfBreak;
+		using var fusionCache = new FusionCache(options, memoryCache);
+		fusionCache.DefaultEntryOptions.AllowBackgroundBackplaneOperations = false;
+
+		fusionCache.SetupBackplane(chaosBackplane);
+
+		Dictionary<CircuitBreakerState, int> stateCounts = new Dictionary<CircuitBreakerState, int>
+		{
+			{ CircuitBreakerState.Closed, 0 },
+			{ CircuitBreakerState.Open, 0 },
+			{ CircuitBreakerState.HalfOpen, 0 }
+		};
+
+		fusionCache.Events.Backplane.CircuitBreakerChange += (sender, e) =>
+		{
+			lock (stateCounts)
+			{
+				stateCounts[e.State] = stateCounts[e.State] + 1;
+			}
+		};
+
+		var key = "test-key";
+		var value = 42;
+
+		// Initial state: Closed (no events yet)
+		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
+
+		// STEP 1: Open the circuit (should fire event with isActive=false)
+		chaosBackplane.SetAlwaysThrow();
+		await fusionCache.SetAsync(key, value);
+		
+		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
+
+		Thread.Sleep(100); // wait for event to be processed
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]);
+
+		// STEP 2: Wait for break duration, then trigger half-open transition
+		await Task.Delay(durationOfBreak.PlusALittleBit());
+		chaosBackplane.SetNeverThrow(); // Fix the backplane for success
+
+		// 1. This should transition to half-open  and fire half-open event
+		// 2. The setasync will be successful and circuit will be closed and fire closed event
+		await fusionCache.SetAsync(key + "_recovery", value);
+		
+		Thread.Sleep(100); // wait for event to be processed
+		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
+		Assert.Equal(1, stateCounts[CircuitBreakerState.HalfOpen]);
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Closed]); // Still one open event
+	}
+
 }

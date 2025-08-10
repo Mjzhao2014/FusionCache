@@ -65,18 +65,27 @@ internal sealed partial class BackplaneAccessor
 		{
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
 				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane temporarily de-activated for {BreakDuration}", _cache.CacheName, _cache.InstanceId, operationId, key, _options.BackplaneCircuitBreakerDuration);
-			_events.OnCircuitBreakerChange(operationId, key, false);
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
 		}
 	}
 
 	public bool IsCurrentlyUsable(string? operationId, string? key)
 	{
 		var res = _breaker.TryExecute(out var stateChanged);
-		if (stateChanged && _breaker.State == CircuitBreakerState.Closed)
+		if (stateChanged)
 		{
-			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId, key);
-			_events.OnCircuitBreakerChange(operationId, key, true);
+			if (_breaker.State == CircuitBreakerState.HalfOpen)
+			{
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane entering half-open state for testing", _cache.CacheName, _cache.InstanceId, operationId, key);
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			}
+			else if (_breaker.State == CircuitBreakerState.Closed)
+			{
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId, key);
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			}
 		}
 		return res;
 	}

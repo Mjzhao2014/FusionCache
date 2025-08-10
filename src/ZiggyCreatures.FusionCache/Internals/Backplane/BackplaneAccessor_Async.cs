@@ -142,7 +142,7 @@ internal partial class BackplaneAccessor
 			{
 				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
 					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId, cacheKey);
-				_events.OnCircuitBreakerChange(operationId, cacheKey, true);
+				_events.OnCircuitBreakerChange(operationId, cacheKey, _breaker.State);
 			}
 		}
 		return succeeded;
@@ -225,7 +225,7 @@ internal partial class BackplaneAccessor
 				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId);
 
 			// EVENT
-			_events.OnCircuitBreakerChange(operationId, message.CacheKey, true);
+			_events.OnCircuitBreakerChange(operationId, message.CacheKey, _breaker.State);
 		}
 
 		// ACTIVITY

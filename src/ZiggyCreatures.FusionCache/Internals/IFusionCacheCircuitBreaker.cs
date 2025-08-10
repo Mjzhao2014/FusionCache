@@ -46,7 +46,7 @@ namespace ZiggyCreatures.Caching.Fusion.Internals
 	/// <summary>
 	/// Represents the basic state of a circuit breaker.
 	/// </summary>
-	internal enum CircuitBreakerState
+	public enum CircuitBreakerState
 	{
 		/// <summary>
 		/// The circuit is closed and operations are allowed to proceed.

@@ -43,7 +43,7 @@ internal partial class DistributedCacheAccessor
 			{
 				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
 					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
-				_events.OnCircuitBreakerChange(operationId, key, true);
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
 			}
 		}
 		return succeeded;
@@ -186,7 +186,7 @@ internal partial class DistributedCacheAccessor
 			{
 				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
 					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
-				_events.OnCircuitBreakerChange(operationId, key, true);
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
 			}
 		}
 
