@@ -8,27 +8,32 @@ internal partial class DistributedCacheAccessor
 {
 	private bool ExecuteOperation(string operationId, string key, Action<CancellationToken> action, string actionDescription, FusionCacheEntryOptions options, CancellationToken token)
 	{
-		//if (IsCurrentlyUsable(operationId, key) == false)
-		//	return false;
-
+		if (!TryBeginOperation(operationId, key))
+			return false;
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
-
 			RunUtils.RunSyncActionWithTimeout(action, Timeout.InfiniteTimeSpan, true, token: token);
-
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
+			_breaker.RecordSuccess(out var stateChanged);
+			if (stateChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			}
 		}
 		catch (Exception exc)
 		{
+			_breaker.RecordFailure(out var stateChanged);
+			if (stateChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			}
 			ProcessError(operationId, key, exc, actionDescription);
-
 			// ACTIVITY
 			Activity.Current?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			Activity.Current?.AddException(exc);
-
 			if (exc is not SyntheticTimeoutException && options.ReThrowDistributedCacheExceptions)
 			{
 				if (_options.ReThrowOriginalExceptions)
@@ -40,10 +45,8 @@ internal partial class DistributedCacheAccessor
 					throw new FusionCacheDistributedCacheException("An error occurred while working with the distributed cache", exc);
 				}
 			}
-
 			return false;
 		}
-
 		return true;
 	}
 

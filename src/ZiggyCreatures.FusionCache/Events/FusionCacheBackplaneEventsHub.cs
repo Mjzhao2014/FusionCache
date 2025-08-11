@@ -38,12 +38,13 @@ public sealed class FusionCacheBackplaneEventsHub
 	/// </summary>
 	public event EventHandler<FusionCacheBackplaneMessageEventArgs>? MessageReceived;
 
-	internal void OnCircuitBreakerChange(string? operationId, string? key, bool isClosed)
+	internal void OnCircuitBreakerChange(string? operationId, string? key, CircuitBreakerState state)
 	{
-		// METRIC
+		// METRIC: maintain existing closed tag to avoid breaking dashboards
+		var isClosed = state == CircuitBreakerState.Closed;
 		Metrics.CounterBackplaneCircuitBreakerChange.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.BackplaneCircuitBreakerClosed, isClosed));
 
-		CircuitBreakerChange?.SafeExecute(operationId, key, _cache, new FusionCacheCircuitBreakerChangeEventArgs(isClosed), nameof(CircuitBreakerChange), _logger, _errorsLogLevel, _syncExecution);
+		CircuitBreakerChange?.SafeExecute(operationId, key, _cache, new FusionCacheCircuitBreakerChangeEventArgs(state), nameof(CircuitBreakerChange), _logger, _errorsLogLevel, _syncExecution);
 	}
 
 	internal void OnMessagePublished(string operationId, BackplaneMessage message)

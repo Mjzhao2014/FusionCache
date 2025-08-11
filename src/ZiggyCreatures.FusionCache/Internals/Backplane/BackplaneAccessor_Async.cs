@@ -87,8 +87,8 @@ internal partial class BackplaneAccessor
 
 		var cacheKey = message.CacheKey!;
 
-		// CHECK: CURRENTLY NOT USABLE
-		if (IsCurrentlyUsable(operationId, cacheKey) == false)
+		// CHECK CIRCUIT BREAKER
+		if (!TryBeginOperation(operationId, cacheKey))
 		{
 			return false;
 		}
@@ -112,15 +112,23 @@ internal partial class BackplaneAccessor
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
 
 			await _backplane.PublishAsync(message, options, token).ConfigureAwait(false);
-
 			// EVENT
 			_events.OnMessagePublished(operationId, message);
-
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
+			_breaker.RecordSuccess(out var stateChanged);
+			if (stateChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, cacheKey, _breaker.State);
+			}
 		}
 		catch (Exception exc)
 		{
+			_breaker.RecordFailure(out var stateChanged);
+			if (stateChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, cacheKey, _breaker.State);
+			}
 			ProcessError(operationId, cacheKey, exc, actionDescription);
 
 			// ACTIVITY
@@ -214,15 +222,14 @@ internal partial class BackplaneAccessor
 			return;
 		}
 
-		// CHECK CIRCUIT BREAKER
-		_breaker.Close(out var hasChanged);
-		if (hasChanged)
+		// CHECK CIRCUIT BREAKER: receiving a message signals healthy backplane
+		_breaker.Close(out var stateChanged);
+		if (stateChanged)
 		{
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
 				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId);
-
 			// EVENT
-			_events.OnCircuitBreakerChange(operationId, message.CacheKey, true);
+			_events.OnCircuitBreakerChange(operationId, message.CacheKey, _breaker.State);
 		}
 
 		// ACTIVITY
