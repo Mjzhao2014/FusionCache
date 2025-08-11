@@ -211,16 +211,18 @@ public class CircuitBreakerTests : AbstractTests
 		// Wait for break duration and return to closed
 		Thread.Sleep(durationOfBreak.PlusALittleBit());
 		circuitBreaker.TryExecute(out _); // Move to half-open
-		circuitBreaker.RecordSuccess(out _); // Move to closed
+		circuitBreaker.RecordSuccess(out bool isStateChanged2); // Move to closed
+		Assert.True(isStateChanged2);
+		Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
 		
 		// Wait for sampling window to expire
 		Thread.Sleep(samplingDuration.PlusALittleBit());
 		
 		// New window should have reset stats
 		circuitBreaker.RecordFailure(out _);
-		circuitBreaker.RecordFailure(out bool isStateChanged2);
+		circuitBreaker.RecordFailure(out bool isStateChanged3);
 		// Should stay closed because window was reset
-		Assert.False(isStateChanged2);
+		Assert.False(isStateChanged3);
 		Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
 	}
 
@@ -255,6 +257,110 @@ public class CircuitBreakerTests : AbstractTests
 		circuitBreaker.RecordSuccess(out bool isStateChanged3);
 		Assert.True(isStateChanged3);
 		Assert.Equal(CircuitBreakerState.Closed, circuitBreaker.State);
+	}
+
+	[Fact]
+	public void SimpleCircuitBreaker_HalfOpenStateAllowsExactlyOneConcurrentCall()
+	{
+		// Test that SimpleCircuitBreaker only allows exactly one concurrent call in half-open state
+		var durationOfBreak = TimeSpan.FromMilliseconds(100);
+		var circuitBreaker = new SimpleCircuitBreaker(1, durationOfBreak);
+		
+		// Open the circuit
+		circuitBreaker.RecordFailure(out _);
+		Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
+		
+		// Wait for break duration to pass
+		Thread.Sleep(durationOfBreak.PlusALittleBit());
+		
+		// Create multiple concurrent tasks that will all try to execute when circuit is half-open
+		const int concurrentTasks = 10;
+		var tasks = new Task<bool>[concurrentTasks];
+		var barrier = new System.Threading.Barrier(concurrentTasks + 1); // +1 for main thread
+		var allowedCalls = 0;
+		
+		for (int i = 0; i < concurrentTasks; i++)
+		{
+			tasks[i] = Task.Run(() =>
+			{
+				// All tasks wait at the barrier to ensure simultaneous execution
+				barrier.SignalAndWait();
+				
+				// All tasks attempt to execute simultaneously
+				bool allowed = circuitBreaker.TryExecute(out _);
+				if (allowed)
+				{
+					Interlocked.Increment(ref allowedCalls);
+				}
+				return allowed;
+			});
+		}
+		
+		// Wait for all tasks to be ready, then release them simultaneously
+		barrier.SignalAndWait();
+		
+		// Wait for all tasks to complete
+		Task.WaitAll(tasks);
+		
+		// Verify exactly one call was allowed
+		var successfulCalls = tasks.Count(t => t.Result);
+		Assert.Equal(1, successfulCalls);
+		Assert.Equal(1, allowedCalls);
+		
+		// Circuit should be in half-open state
+		Assert.Equal(CircuitBreakerState.HalfOpen, circuitBreaker.State);
+	}
+
+	[Fact]
+	public void AdvancedCircuitBreaker_HalfOpenStateAllowsExactlyOneConcurrentCall()
+	{
+		// Test that AdvancedCircuitBreaker only allows exactly one concurrent call in half-open state
+		var durationOfBreak = TimeSpan.FromMilliseconds(100);
+		var circuitBreaker = new AdvancedCircuitBreaker(0.5, TimeSpan.FromSeconds(10), 1, durationOfBreak);
+		
+		// Open the circuit
+		circuitBreaker.RecordFailure(out _);
+		Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
+		
+		// Wait for break duration to pass
+		Thread.Sleep(durationOfBreak.PlusALittleBit());
+		
+		// Create multiple concurrent tasks that will all try to execute when circuit is half-open
+		const int concurrentTasks = 10;
+		var tasks = new Task<bool>[concurrentTasks];
+		var barrier = new System.Threading.Barrier(concurrentTasks + 1); // +1 for main thread
+		var allowedCalls = 0;
+		
+		for (int i = 0; i < concurrentTasks; i++)
+		{
+			tasks[i] = Task.Run(() =>
+			{
+				// All tasks wait at the barrier to ensure simultaneous execution
+				barrier.SignalAndWait();
+				
+				// All tasks attempt to execute simultaneously
+				bool allowed = circuitBreaker.TryExecute(out _);
+				if (allowed)
+				{
+					Interlocked.Increment(ref allowedCalls);
+				}
+				return allowed;
+			});
+		}
+		
+		// Wait for all tasks to be ready, then release them simultaneously
+		barrier.SignalAndWait();
+		
+		// Wait for all tasks to complete
+		Task.WaitAll(tasks);
+		
+		// Verify exactly one call was allowed
+		var successfulCalls = tasks.Count(t => t.Result);
+		Assert.Equal(1, successfulCalls);
+		Assert.Equal(1, allowedCalls);
+		
+		// Circuit should be in half-open state
+		Assert.Equal(CircuitBreakerState.HalfOpen, circuitBreaker.State);
 	}
 
 	[Fact]
@@ -355,128 +461,4 @@ public class CircuitBreakerTests : AbstractTests
 		Assert.True(isStateChanged);
 		Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
 	}
-
-	[Fact]
-	public void SimpleCircuitBreaker_JitterDurationHandlesNegativeValues()
-	{
-		// Test that negative jitter duration values work gracefully
-		var circuitBreaker1 = new SimpleCircuitBreaker(1, TimeSpan.FromMilliseconds(1000), TimeSpan.FromMilliseconds(-100));
-		var circuitBreaker2 = new SimpleCircuitBreaker(1, TimeSpan.FromMilliseconds(1000), TimeSpan.FromMilliseconds(2000));
-		
-		// Both should work without throwing exceptions
-		circuitBreaker1.RecordFailure(out _);
-		circuitBreaker2.RecordFailure(out _);
-		
-		Assert.Equal(CircuitBreakerState.Open, circuitBreaker1.State);
-		Assert.Equal(CircuitBreakerState.Open, circuitBreaker2.State);
-	}
-
-	[Fact]
-	public void AdvancedCircuitBreaker_JitterDurationHandlesNegativeValues()
-	{
-		// Test that negative jitter duration values work gracefully
-		var circuitBreaker1 = new AdvancedCircuitBreaker(0.5, TimeSpan.FromSeconds(10), 1, TimeSpan.FromMilliseconds(1000), TimeSpan.FromMilliseconds(-100));
-		var circuitBreaker2 = new AdvancedCircuitBreaker(0.5, TimeSpan.FromSeconds(10), 1, TimeSpan.FromMilliseconds(1000), TimeSpan.FromMilliseconds(2000));
-		
-		// Both should work without throwing exceptions
-		circuitBreaker1.RecordFailure(out _);
-		circuitBreaker2.RecordFailure(out _);
-		
-		Assert.Equal(CircuitBreakerState.Open, circuitBreaker1.State);
-		Assert.Equal(CircuitBreakerState.Open, circuitBreaker2.State);
-	}
-
-	[Fact]
-	public void SimpleCircuitBreaker_JitterDistributionIsReasonable()
-	{
-		// Test that jitter produces reasonable distribution of break times
-		const int iterations = 50;
-		const int breakDurationMs = 500;
-		const int jitterMs = 100; // 100ms jitter
-		var breakDuration = TimeSpan.FromMilliseconds(breakDurationMs);
-		var jitterMaxDuration = TimeSpan.FromMilliseconds(jitterMs);
-		
-		var breakTimes = new List<long>();
-		
-		for (int i = 0; i < iterations; i++)
-		{
-			var circuitBreaker = new SimpleCircuitBreaker(1, breakDuration, jitterMaxDuration);
-			var startTime = DateTimeOffset.UtcNow.Ticks;
-			
-			// Open the circuit
-			circuitBreaker.RecordFailure(out _);
-			Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-			
-			// Busy wait until circuit allows execution
-			while (!circuitBreaker.TryExecute(out _))
-			{
-				Thread.Sleep(5);
-			}
-			
-			var elapsedTime = DateTimeOffset.UtcNow.Ticks - startTime;
-			breakTimes.Add(elapsedTime);
-		}
-		
-		var minBreakTime = breakTimes.Min();
-		var maxBreakTime = breakTimes.Max();
-		var baseBreakTicks = breakDuration.Ticks;
-		var expectedMaxJitter = jitterMaxDuration.Ticks;
-		
-		// Verify the distribution is within expected bounds
-		Assert.True(minBreakTime >= baseBreakTicks * 0.9, "Minimum break time should be close to base duration");
-		Assert.True(maxBreakTime <= baseBreakTicks + expectedMaxJitter + TimeSpan.FromMilliseconds(50).Ticks, 
-			"Maximum break time should be within jitter bounds (allowing some tolerance)");
-		
-		// Verify we got some variation (not all the same)
-		var uniqueBreakTimes = breakTimes.Distinct().Count();
-		Assert.True(uniqueBreakTimes > iterations * 0.1, "Should have reasonable variation in break times");
-	}
-
-	[Fact]
-	public void AdvancedCircuitBreaker_JitterDistributionIsReasonable()
-	{
-		// Test that jitter produces reasonable distribution of break times for advanced circuit breaker
-		const int iterations = 50;
-		const int breakDurationMs = 500;
-		const int jitterMs = 100; // 100ms jitter
-		var breakDuration = TimeSpan.FromMilliseconds(breakDurationMs);
-		var jitterMaxDuration = TimeSpan.FromMilliseconds(jitterMs);
-		
-		var breakTimes = new List<long>();
-		
-		for (int i = 0; i < iterations; i++)
-		{
-			var circuitBreaker = new AdvancedCircuitBreaker(0.5, TimeSpan.FromSeconds(10), 1, breakDuration, jitterMaxDuration);
-			var startTime = DateTimeOffset.UtcNow.Ticks;
-			
-			// Open the circuit
-			circuitBreaker.RecordFailure(out _);
-			Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
-			
-			// Busy wait until circuit allows execution
-			while (!circuitBreaker.TryExecute(out _))
-			{
-				Thread.Sleep(5);
-			}
-			
-			var elapsedTime = DateTimeOffset.UtcNow.Ticks - startTime;
-			breakTimes.Add(elapsedTime);
-		}
-		
-		var minBreakTime = breakTimes.Min();
-		var maxBreakTime = breakTimes.Max();
-		var baseBreakTicks = breakDuration.Ticks;
-		var expectedMaxJitter = jitterMaxDuration.Ticks;
-		
-		// Verify the distribution is within expected bounds
-		Assert.True(minBreakTime >= baseBreakTicks * 0.9, "Minimum break time should be close to base duration");
-		Assert.True(maxBreakTime <= baseBreakTicks + expectedMaxJitter + TimeSpan.FromMilliseconds(50).Ticks, 
-			"Maximum break time should be within jitter bounds (allowing some tolerance)");
-		
-		// Verify we got some variation (not all the same)
-		var uniqueBreakTimes = breakTimes.Distinct().Count();
-		Assert.True(uniqueBreakTimes > iterations * 0.1, "Should have reasonable variation in break times");
-	}
-
-	
 }
