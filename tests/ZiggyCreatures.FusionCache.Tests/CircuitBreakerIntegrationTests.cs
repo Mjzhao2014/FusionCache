@@ -127,19 +127,16 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		await fusionCache.SetAsync(key, value);
 		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
 		Assert.Equal(1, TestsUtils.GetDistributedCacheCircuitBreakerFailureCount(fusionCache));
-		
-		// Second set should fail and still not open circuit (failure count = 2)
+
+		// Second set should fail and open circuit (failure count = 2)
 		await fusionCache.SetAsync(key + "2", value);
-		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
 		Assert.Equal(2, TestsUtils.GetDistributedCacheCircuitBreakerFailureCount(fusionCache));
 
-		// Third set should open the circuit (exceeds maxFailuresBeforeBreaking = 2)
+		// Third set won't be passed through since the circut breaer is open, and it's not counted as failure.
 		await fusionCache.SetAsync(key + "3", value);
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-
-		// Should not attempt distributed cache operations while open
-		await fusionCache.SetAsync(key + "4", value);
-		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+		Assert.Equal(2, TestsUtils.GetDistributedCacheCircuitBreakerFailureCount(fusionCache));
 
 		// Wait for break duration and verify half-open behavior
 		await Task.Delay(durationOfBreak.PlusALittleBit());
@@ -147,9 +144,10 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		// Fix the distributed cache to allow successful operations
 		chaosDistributedCache.SetNeverThrow();
 
-		// Next operation should transition to half-open
-		await fusionCache.SetAsync(key + "5", value);
-		Assert.Equal(CircuitBreakerState.HalfOpen, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+		// Next operation should transition to half-open and open after the setasync completed.
+		await fusionCache.SetAsync(key + "4", value);
+		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+		Assert.Equal(0, TestsUtils.GetDistributedCacheCircuitBreakerFailureCount(fusionCache));
 	}
 
 	[Theory]
@@ -201,7 +199,7 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 	public async Task SimpleCircuitBreaker_IntegratesWithBackplane()
 	{
 		var duration = TimeSpan.FromMilliseconds(2_000);
-		var maxFailuresBeforeBreaking = 2;
+		var maxFailuresBeforeBreaking = 3;
 		var durationOfBreak = TimeSpan.FromMilliseconds(200);
 		var backplaneConnectionId = "test-connection";
 
@@ -238,8 +236,8 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		Assert.Equal(2, TestsUtils.GetBackplaneCircuitBreakerFailureCount(fusionCache));
 
 		await fusionCache.SetAsync(key + "3", value);
-		// Circuit should now be open due to consecutive failures (exceeds maxFailuresBeforeBreaking = 2)
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
+		Assert.Equal(3, TestsUtils.GetBackplaneCircuitBreakerFailureCount(fusionCache));
 	}
 
 	[Fact]
@@ -293,7 +291,7 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		var maxFailuresBeforeBreaking = 1;
 		var durationOfBreak = TimeSpan.FromMilliseconds(200);
 		var distributedCacheJitter = TimeSpan.FromMilliseconds(50);
-		var backplaneJitter = TimeSpan.FromMilliseconds(100);
+		var backplaneJitter = TimeSpan.FromMilliseconds(500);
 		var backplaneConnectionId = "test-connection";
 
 		using var memoryCache = new MemoryCache(new MemoryCacheOptions());
@@ -345,9 +343,6 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		// Test that jitter configuration is respected (operations should complete without errors)
 		await fusionCache.SetAsync(key + "2", value);
 		await fusionCache.SetAsync(key + "3", value);
-
-		// Both circuits should eventually recover (we can't test exact timing due to jitter randomness)
-		// but we can verify the configuration was applied correctly by ensuring operations complete
 	}
 
 	[Theory]
@@ -412,7 +407,7 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
 		Assert.Equal(1, stateCounts[CircuitBreakerState.HalfOpen]);
 		Assert.Equal(1, stateCounts[CircuitBreakerState.Closed]); 
-
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]); //unchanged
 	}
 
 	[Fact]
@@ -459,7 +454,7 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		// STEP 1: Open the circuit (should fire event with isActive=false)
 		chaosBackplane.SetAlwaysThrow();
 		await fusionCache.SetAsync(key, value);
-		
+
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
 
 		Thread.Sleep(100); // wait for event to be processed
@@ -472,11 +467,12 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		// 1. This should transition to half-open  and fire half-open event
 		// 2. The setasync will be successful and circuit will be closed and fire closed event
 		await fusionCache.SetAsync(key + "_recovery", value);
-		
+
 		Thread.Sleep(100); // wait for event to be processed
 		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
 		Assert.Equal(1, stateCounts[CircuitBreakerState.HalfOpen]);
 		Assert.Equal(1, stateCounts[CircuitBreakerState.Closed]); // Still one open event
+		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]); //unchanged
 	}
 
 }
