@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Backplane;
 using ZiggyCreatures.Caching.Fusion.Internals;
+using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
 
 namespace ZiggyCreatures.Caching.Fusion.Events;
@@ -38,12 +39,11 @@ public sealed class FusionCacheBackplaneEventsHub
 	/// </summary>
 	public event EventHandler<FusionCacheBackplaneMessageEventArgs>? MessageReceived;
 
-	internal void OnCircuitBreakerChange(string? operationId, string? key, bool isClosed)
+	internal void OnCircuitBreakerChange(string? operationId, string? key, CircuitBreakerState state)
 	{
-		// METRIC
-		Metrics.CounterBackplaneCircuitBreakerChange.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.BackplaneCircuitBreakerClosed, isClosed));
-
-		CircuitBreakerChange?.SafeExecute(operationId, key, _cache, new FusionCacheCircuitBreakerChangeEventArgs(isClosed), nameof(CircuitBreakerChange), _logger, _errorsLogLevel, _syncExecution);
+		// METRIC: for backward compatibility, expose a boolean tag indicating closed/open
+		Metrics.CounterBackplaneCircuitBreakerChange.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.BackplaneCircuitBreakerClosed, state == CircuitBreakerState.Closed));
+		CircuitBreakerChange?.SafeExecute(operationId, key, _cache, new FusionCacheCircuitBreakerChangeEventArgs(state), nameof(CircuitBreakerChange), _logger, _errorsLogLevel, _syncExecution);
 	}
 
 	internal void OnMessagePublished(string operationId, BackplaneMessage message)

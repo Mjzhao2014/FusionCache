@@ -1,32 +1,42 @@
-﻿namespace ZiggyCreatures.Caching.Fusion.Internals;
+using System.Threading;
+
+namespace ZiggyCreatures.Caching.Fusion.Internals;
 
 /// <summary>
-/// A simple, reusable circuit-breaker that opens after a configured number of consecutive failures.
-/// It also supports a half-open state when transitioning from open back to closed, allowing exactly one call to flow through.
+/// An advanced circuit breaker that trips when a failure rate exceeds a threshold within a sampling window.
+/// It will remain open for a configured break duration (plus optional jitter) before transitioning to a half–open state
+/// to test recovery.
 /// </summary>
-internal sealed class SimpleCircuitBreaker
+internal sealed class AdvancedCircuitBreaker
 	: IFusionCacheCircuitBreaker
 {
-	private int _circuitState; // uses numeric value from CircuitBreakerState enum
-	private long _openUntilTicks;
+	private readonly double _failureThreshold;
+	private readonly long _samplingDurationTicks;
+	private readonly int _minimumThroughput;
 	private readonly long _breakDurationTicks;
 	private readonly long _jitterMaxDurationTicks;
-	private readonly int _failuresAllowedBeforeBreaking;
+	private int _circuitState;
+	private long _openUntilTicks;
+	private long _windowStartTicks;
 	private int _failureCount;
+	private int _throughputCount;
 	private int _halfOpenAttempt;
 
-	public SimpleCircuitBreaker(int failuresAllowedBeforeBreaking, TimeSpan breakDuration, TimeSpan jitterMaxDuration = default)
+	public AdvancedCircuitBreaker(double failureThreshold, TimeSpan samplingDuration, int minimumThroughput, TimeSpan breakDuration, TimeSpan jitterMaxDuration = default)
 	{
-		_failuresAllowedBeforeBreaking = failuresAllowedBeforeBreaking;
-		BreakDuration = breakDuration;
-		_breakDurationTicks = BreakDuration.Ticks;
+		_failureThreshold = failureThreshold;
+		_samplingDurationTicks = samplingDuration.Ticks;
+		_minimumThroughput = minimumThroughput;
+		_breakDurationTicks = breakDuration.Ticks;
 		_jitterMaxDurationTicks = jitterMaxDuration.Ticks;
-		_openUntilTicks = DateTimeOffset.MinValue.Ticks;
+		BreakDuration = breakDuration;
 		_circuitState = (int)CircuitBreakerState.Closed;
+		_openUntilTicks = DateTimeOffset.MinValue.Ticks;
+		_windowStartTicks = DateTimeOffset.UtcNow.Ticks;
 	}
 
 	/// <summary>
-	/// The base duration used for a break when tripped.
+	/// The base break duration used when opening the circuit.
 	/// </summary>
 	public TimeSpan BreakDuration { get; }
 
@@ -34,21 +44,32 @@ internal sealed class SimpleCircuitBreaker
 
 	public int CurrentFailureCount => Volatile.Read(ref _failureCount);
 
+	private void EnsureWindow()
+	{
+		var nowTicks = DateTimeOffset.UtcNow.Ticks;
+		var windowStart = Volatile.Read(ref _windowStartTicks);
+		if (nowTicks - windowStart >= _samplingDurationTicks)
+		{
+			// reset counts
+			Interlocked.Exchange(ref _windowStartTicks, nowTicks);
+			Interlocked.Exchange(ref _failureCount, 0);
+			Interlocked.Exchange(ref _throughputCount, 0);
+		}
+	}
+
 	public bool TryExecute(out bool isStateChanged)
 	{
 		isStateChanged = false;
 		if (_breakDurationTicks == 0)
 		{
-			// no breaker configured
 			return true;
 		}
-		var state = (CircuitBreakerState)Volatile.Read(ref _circuitState);
+		var state = State;
 		if (state == CircuitBreakerState.Open)
 		{
-			// has the break period elapsed?
 			if (DateTimeOffset.UtcNow.Ticks >= Volatile.Read(ref _openUntilTicks))
 			{
-				// transition to half-open
+				// transition to half–open
 				var old = Interlocked.Exchange(ref _circuitState, (int)CircuitBreakerState.HalfOpen);
 				isStateChanged = old != (int)CircuitBreakerState.HalfOpen;
 				Interlocked.Exchange(ref _halfOpenAttempt, 0);
@@ -66,13 +87,21 @@ internal sealed class SimpleCircuitBreaker
 
 	public void RecordSuccess(out bool isStateChanged)
 	{
-		// reset consecutive failure count
-		Interlocked.Exchange(ref _failureCount, 0);
 		isStateChanged = false;
-		if (State == CircuitBreakerState.HalfOpen)
+		var state = State;
+		if (state == CircuitBreakerState.Closed)
 		{
+			EnsureWindow();
+			Interlocked.Increment(ref _throughputCount);
+		}
+		else if (state == CircuitBreakerState.HalfOpen)
+		{
+			// test succeeded: close the circuit and reset window
 			var old = Interlocked.Exchange(ref _circuitState, (int)CircuitBreakerState.Closed);
 			isStateChanged = old != (int)CircuitBreakerState.Closed;
+			Interlocked.Exchange(ref _failureCount, 0);
+			Interlocked.Exchange(ref _throughputCount, 0);
+			Interlocked.Exchange(ref _windowStartTicks, DateTimeOffset.UtcNow.Ticks);
 		}
 	}
 
@@ -82,10 +111,17 @@ internal sealed class SimpleCircuitBreaker
 		var state = State;
 		if (state == CircuitBreakerState.Closed)
 		{
-			var currentFailures = Interlocked.Increment(ref _failureCount);
-			if (currentFailures >= _failuresAllowedBeforeBreaking)
+			EnsureWindow();
+			Interlocked.Increment(ref _throughputCount);
+			Interlocked.Increment(ref _failureCount);
+			var throughput = Volatile.Read(ref _throughputCount);
+			if (throughput >= _minimumThroughput)
 			{
-				Open(out isStateChanged);
+				var failureRate = (double)Volatile.Read(ref _failureCount) / throughput;
+				if (failureRate >= _failureThreshold)
+				{
+					Open(out isStateChanged);
+				}
 			}
 		}
 		else if (state == CircuitBreakerState.HalfOpen)
@@ -96,7 +132,6 @@ internal sealed class SimpleCircuitBreaker
 
 	private void Open(out bool isStateChanged)
 	{
-		// compute break with optional jitter
 		var breakTicks = _breakDurationTicks;
 		if (_jitterMaxDurationTicks > 0)
 		{
@@ -113,6 +148,8 @@ internal sealed class SimpleCircuitBreaker
 	{
 		Interlocked.Exchange(ref _openUntilTicks, DateTimeOffset.MinValue.Ticks);
 		Interlocked.Exchange(ref _failureCount, 0);
+		Interlocked.Exchange(ref _throughputCount, 0);
+		Interlocked.Exchange(ref _windowStartTicks, DateTimeOffset.UtcNow.Ticks);
 		var old = Interlocked.Exchange(ref _circuitState, (int)CircuitBreakerState.Closed);
 		isStateChanged = old != (int)CircuitBreakerState.Closed;
 	}

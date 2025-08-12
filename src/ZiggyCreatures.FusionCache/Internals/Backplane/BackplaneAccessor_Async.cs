@@ -118,10 +118,13 @@ internal partial class BackplaneAccessor
 
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
+
+			ProcessBreakerSuccess(operationId, cacheKey);
 		}
 		catch (Exception exc)
 		{
 			ProcessError(operationId, cacheKey, exc, actionDescription);
+			ProcessBreakerFailure(operationId, cacheKey);
 
 			// ACTIVITY
 			Activity.Current?.SetStatus(ActivityStatusCode.Error, exc.Message);
@@ -222,7 +225,7 @@ internal partial class BackplaneAccessor
 				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId);
 
 			// EVENT
-			_events.OnCircuitBreakerChange(operationId, message.CacheKey, true);
+		_events.OnCircuitBreakerChange(operationId, message.CacheKey, _breaker.State);
 		}
 
 		// ACTIVITY

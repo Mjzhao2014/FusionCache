@@ -11,7 +11,7 @@ internal sealed partial class BackplaneAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheBackplaneEventsHub _events;
-	private readonly SimpleCircuitBreaker _breaker;
+	private readonly IFusionCacheCircuitBreaker _breaker;
 
 	public BackplaneAccessor(FusionCache cache, IFusionCacheBackplane backplane, FusionCacheOptions options, ILogger? logger)
 	{
@@ -30,7 +30,14 @@ internal sealed partial class BackplaneAccessor
 		_events = _cache.Events.Backplane;
 
 		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerDuration);
+		if (options.BackplaneCircuitBreakerFailureThreshold > 0 && options.BackplaneCircuitBreakerSamplingDuration > TimeSpan.Zero && options.BackplaneCircuitBreakerMinimumThroughput > 0)
+		{
+			_breaker = new AdvancedCircuitBreaker(options.BackplaneCircuitBreakerFailureThreshold, options.BackplaneCircuitBreakerSamplingDuration, options.BackplaneCircuitBreakerMinimumThroughput, options.BackplaneCircuitBreakerDuration, options.BackplaneCircuitBreakerJitterMaxDuration);
+		}
+		else
+		{
+			_breaker = new SimpleCircuitBreaker(options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking, options.BackplaneCircuitBreakerDuration, options.BackplaneCircuitBreakerJitterMaxDuration);
+		}
 	}
 
 	public IFusionCacheBackplane Backplane
@@ -38,38 +45,46 @@ internal sealed partial class BackplaneAccessor
 		get { return _backplane; }
 	}
 
-	private void UpdateLastError(string operationId, string key)
+	internal CircuitBreakerState CircuitBreakerState => _breaker.State;
+
+	internal int CircuitBreakerFailureCount => _breaker.CurrentFailureCount;
+
+	private void ProcessBreakerFailure(string operationId, string key)
 	{
-		// NO DISTRIBUTEC CACHE
 		if (_backplane is null)
 			return;
-
-		var res = _breaker.TryOpen(out var hasChanged);
-
-		if (res && hasChanged)
+		_breaker.RecordFailure(out var stateChanged);
+		if (stateChanged)
 		{
-			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane temporarily de-activated for {BreakDuration}", _cache.CacheName, _cache.InstanceId, operationId, key, _breaker.BreakDuration);
+			if (_breaker.State == CircuitBreakerState.Open && (_logger?.IsEnabled(LogLevel.Warning) ?? false))
+				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane temporarily de-activated for {BreakDuration}", _cache.CacheName, _cache.InstanceId, operationId, key, _options.BackplaneCircuitBreakerDuration);
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+		}
+	}
 
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, key, false);
+	private void ProcessBreakerSuccess(string operationId, string key)
+	{
+		_breaker.RecordSuccess(out var stateChanged);
+		if (stateChanged)
+		{
+			if (_breaker.State == CircuitBreakerState.Closed && (_logger?.IsEnabled(LogLevel.Warning) ?? false))
+				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId, key);
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
 		}
 	}
 
 	public bool IsCurrentlyUsable(string? operationId, string? key)
 	{
-		var res = _breaker.IsClosed(out var hasChanged);
-
-		if (res && hasChanged)
+		var canExecute = _breaker.TryExecute(out var stateChanged);
+		if (stateChanged)
 		{
-			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			if (_breaker.State == CircuitBreakerState.Closed && (_logger?.IsEnabled(LogLevel.Warning) ?? false))
+			{
 				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId, key);
-
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, key, true);
+			}
 		}
-
-		return res;
+		return canExecute;
 	}
 
 	private void ProcessError(string operationId, string key, Exception exc, string actionDescription)
@@ -82,7 +97,7 @@ internal sealed partial class BackplaneAccessor
 			return;
 		}
 
-		UpdateLastError(operationId, key);
+		ProcessBreakerFailure(operationId, key);
 
 		if (_logger?.IsEnabled(_options.BackplaneErrorsLogLevel) ?? false)
 			_logger.Log(_options.BackplaneErrorsLogLevel, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] an error occurred while " + actionDescription, _cache.CacheName, _cache.InstanceId, operationId, key);

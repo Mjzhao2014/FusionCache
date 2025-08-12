@@ -20,10 +20,13 @@ internal partial class DistributedCacheAccessor
 
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
+
+			ProcessBreakerSuccess(operationId, key);
 		}
 		catch (Exception exc)
 		{
 			ProcessError(operationId, key, exc, actionDescription);
+			ProcessBreakerFailure(operationId, key);
 
 			// ACTIVITY
 			Activity.Current?.SetStatus(ActivityStatusCode.Error, exc.Message);
@@ -157,10 +160,12 @@ internal partial class DistributedCacheAccessor
 				true,
 				token: token
 			);
+			ProcessBreakerSuccess(operationId, key);
 		}
 		catch (Exception exc)
 		{
 			ProcessError(operationId, key, exc, "getting entry from distributed");
+			ProcessBreakerFailure(operationId, key);
 
 			// ACTIVITY
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);

@@ -13,7 +13,7 @@ internal sealed partial class DistributedCacheAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheDistributedEventsHub _events;
-	private readonly SimpleCircuitBreaker _breaker;
+	private readonly IFusionCacheCircuitBreaker _breaker;
 	private readonly string _wireFormatToken;
 
 	public DistributedCacheAccessor(IDistributedCache distributedCache, IFusionCacheSerializer serializer, FusionCacheOptions options, ILogger? logger, FusionCacheDistributedEventsHub events)
@@ -33,7 +33,15 @@ internal sealed partial class DistributedCacheAccessor
 		_events = events;
 
 		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerDuration);
+		// if advanced circuit-breaker options have been configured, use it, otherwise fall back to simple consecutive-failure circuit-breaker
+		if (options.DistributedCacheCircuitBreakerFailureThreshold > 0 && options.DistributedCacheCircuitBreakerSamplingDuration > TimeSpan.Zero && options.DistributedCacheCircuitBreakerMinimumThroughput > 0)
+		{
+			_breaker = new AdvancedCircuitBreaker(options.DistributedCacheCircuitBreakerFailureThreshold, options.DistributedCacheCircuitBreakerSamplingDuration, options.DistributedCacheCircuitBreakerMinimumThroughput, options.DistributedCacheCircuitBreakerDuration, options.DistributedCacheCircuitBreakerJitterMaxDuration);
+		}
+		else
+		{
+			_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking, options.DistributedCacheCircuitBreakerDuration, options.DistributedCacheCircuitBreakerJitterMaxDuration);
+		}
 
 		// WIRE FORMAT SETUP
 		_wireFormatToken = _options.DistributedCacheKeyModifierMode == CacheKeyModifierMode.Prefix
@@ -56,6 +64,10 @@ internal sealed partial class DistributedCacheAccessor
 		get { return _cache; }
 	}
 
+	internal CircuitBreakerState CircuitBreakerState => _breaker.State;
+
+	internal int CircuitBreakerFailureCount => _breaker.CurrentFailureCount;
+
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	private string MaybeProcessCacheKey(string key)
 	{
@@ -67,38 +79,49 @@ internal sealed partial class DistributedCacheAccessor
 		};
 	}
 
-	private void UpdateLastError(string operationId, string key)
+	private void ProcessBreakerFailure(string operationId, string key)
 	{
-		// NO DISTRIBUTEC CACHE
+		// NO DISTRIBUTED CACHE
 		if (_cache is null)
 			return;
-
-		var res = _breaker.TryOpen(out var hasChanged);
-
-		if (res && hasChanged)
+		_breaker.RecordFailure(out var stateChanged);
+		if (stateChanged)
 		{
-			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated for {BreakDuration}", _options.CacheName, _options.InstanceId, operationId, key, _breaker.BreakDuration);
+			// if entering open state, log warning
+			if (_breaker.State == CircuitBreakerState.Open && (_logger?.IsEnabled(LogLevel.Warning) ?? false))
+				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated for {BreakDuration}", _options.CacheName, _options.InstanceId, operationId, key, _options.DistributedCacheCircuitBreakerDuration);
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+		}
+	}
 
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, key, false);
+	private void ProcessBreakerSuccess(string operationId, string key)
+	{
+		_breaker.RecordSuccess(out var stateChanged);
+		if (stateChanged)
+		{
+			if (_breaker.State == CircuitBreakerState.Closed && (_logger?.IsEnabled(LogLevel.Warning) ?? false))
+				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
 		}
 	}
 
 	public bool IsCurrentlyUsable(string? operationId, string? key)
 	{
-		var res = _breaker.IsClosed(out var hasChanged);
-
-		if (res && hasChanged)
+		var canExecute = _breaker.TryExecute(out var stateChanged);
+		if (stateChanged)
 		{
-			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
-
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, key, true);
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			if (_breaker.State == CircuitBreakerState.HalfOpen)
+			{
+				// half-open is a transitional state, fire event and allow single call
+			}
+			else if (_breaker.State == CircuitBreakerState.Closed)
+			{
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
+			}
 		}
-
-		return res;
+		return canExecute;
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -112,7 +135,7 @@ internal sealed partial class DistributedCacheAccessor
 			return;
 		}
 
-		UpdateLastError(operationId, key);
+		ProcessBreakerFailure(operationId, key);
 
 		if (_logger?.IsEnabled(_options.DistributedCacheErrorsLogLevel) ?? false)
 			_logger.Log(_options.DistributedCacheErrorsLogLevel, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] an error occurred while " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
