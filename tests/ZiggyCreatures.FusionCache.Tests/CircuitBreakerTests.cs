@@ -449,16 +449,12 @@ public class CircuitBreakerTests : AbstractTests
 	}
 
 	[Theory]
-	[InlineData(0)] // Should be normalized to 1
-	[InlineData(-5)] // Should be normalized to 1
-	public void SimpleCircuitBreaker_NormalizesFailuresAllowedBeforeBreaking(int invalidFailures)
+	[InlineData(0)] 
+	[InlineData(-5)] 
+	public void SimpleCircuitBreaker_ValidateFailuresAllowedBeforeBreaking(int invalidFailures)
 	{
-		// Test that invalid failures allowed values are normalized to 1
-		var circuitBreaker = new SimpleCircuitBreaker(invalidFailures, TimeSpan.FromSeconds(1));
-		
-		// Should open after 1 failure (normalized value)
-		circuitBreaker.RecordFailure(out bool isStateChanged);
-		Assert.True(isStateChanged);
-		Assert.Equal(CircuitBreakerState.Open, circuitBreaker.State);
+		// Test that invalid minimum throughput values are rejected
+		Assert.Throws<ArgumentOutOfRangeException>(() =>
+			new SimpleCircuitBreaker(invalidFailures, TimeSpan.FromSeconds(1)));
 	}
 }
