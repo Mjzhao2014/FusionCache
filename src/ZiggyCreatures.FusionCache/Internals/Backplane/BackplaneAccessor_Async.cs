@@ -88,7 +88,7 @@ internal partial class BackplaneAccessor
 		var cacheKey = message.CacheKey!;
 
 		// CHECK: CURRENTLY NOT USABLE
-		if (IsCurrentlyUsable(operationId, cacheKey) == false)
+		if (TryBeginOperation(operationId, cacheKey) == false)
 		{
 			return false;
 		}
@@ -106,12 +106,14 @@ internal partial class BackplaneAccessor
 
 		var actionDescription = "sending a backplane notification" + isAutoRecovery.ToString(" (auto-recovery)") + isBackground.ToString(" (background)");
 
+		var succeeded = false;
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
 
 			await _backplane.PublishAsync(message, options, token).ConfigureAwait(false);
+			succeeded = true;
 
 			// EVENT
 			_events.OnMessagePublished(operationId, message);
@@ -141,7 +143,17 @@ internal partial class BackplaneAccessor
 
 			return false;
 		}
-
+		finally
+		{
+			if (succeeded)
+			{
+				_breaker.RecordSuccess(out var stateChanged);
+				if (stateChanged)
+				{
+					_events.OnCircuitBreakerChange(operationId, cacheKey, _breaker.State);
+				}
+			}
+		}
 		return true;
 	}
 
@@ -214,15 +226,13 @@ internal partial class BackplaneAccessor
 			return;
 		}
 
-		// CHECK CIRCUIT BREAKER
-		_breaker.Close(out var hasChanged);
+		// Successful receipt of a message indicates the backplane is working again
+		_breaker.RecordSuccess(out var hasChanged);
 		if (hasChanged)
 		{
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
 				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId);
-
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, message.CacheKey, true);
+			_events.OnCircuitBreakerChange(operationId, message.CacheKey, _breaker.State);
 		}
 
 		// ACTIVITY

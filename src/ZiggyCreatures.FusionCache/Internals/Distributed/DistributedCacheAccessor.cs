@@ -13,7 +13,7 @@ internal sealed partial class DistributedCacheAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheDistributedEventsHub _events;
-	private readonly SimpleCircuitBreaker _breaker;
+	private readonly IFusionCacheCircuitBreaker _breaker;
 	private readonly string _wireFormatToken;
 
 	public DistributedCacheAccessor(IDistributedCache distributedCache, IFusionCacheSerializer serializer, FusionCacheOptions options, ILogger? logger, FusionCacheDistributedEventsHub events)
@@ -33,7 +33,7 @@ internal sealed partial class DistributedCacheAccessor
 		_events = events;
 
 		// CIRCUIT-BREAKER
-		_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerDuration);
+		_breaker = new SimpleCircuitBreaker(options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking, options.DistributedCacheCircuitBreakerDuration, options.DistributedCacheCircuitBreakerJitterMaxDuration);
 
 		// WIRE FORMAT SETUP
 		_wireFormatToken = _options.DistributedCacheKeyModifierMode == CacheKeyModifierMode.Prefix
@@ -67,38 +67,42 @@ internal sealed partial class DistributedCacheAccessor
 		};
 	}
 
-	private void UpdateLastError(string operationId, string key)
+	private bool TryBeginOperation(string? operationId, string? key)
 	{
-		// NO DISTRIBUTEC CACHE
-		if (_cache is null)
-			return;
-
-		var res = _breaker.TryOpen(out var hasChanged);
-
-		if (res && hasChanged)
+		var canExecute = _breaker.TryExecute(out var stateChanged);
+		if (stateChanged)
 		{
+			// log state change
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated for {BreakDuration}", _options.CacheName, _options.InstanceId, operationId, key, _breaker.BreakDuration);
-
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, key, false);
+			{
+				if (_breaker.State == CircuitBreakerState.Open)
+				{
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated", _options.CacheName, _options.InstanceId, operationId, key);
+				}
+				else if (_breaker.State == CircuitBreakerState.HalfOpen)
+				{
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache entering half-open state", _options.CacheName, _options.InstanceId, operationId, key);
+				}
+				else
+				{
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
+				}
+			}
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
 		}
+		return canExecute;
 	}
 
+	public CircuitBreakerState CircuitBreakerState => _breaker.State;
+	public int CircuitBreakerFailureCount => _breaker.CurrentFailureCount;
+
+	/// <summary>
+	/// Exposes the previous semantics of checking whether the circuit breaker is closed and the distributed cache can be used.
+	/// This method simply defers to <see cref="TryBeginOperation(string?, string?)"/>.
+	/// </summary>
 	public bool IsCurrentlyUsable(string? operationId, string? key)
 	{
-		var res = _breaker.IsClosed(out var hasChanged);
-
-		if (res && hasChanged)
-		{
-			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
-				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache activated again", _options.CacheName, _options.InstanceId, operationId, key);
-
-			// EVENT
-			_events.OnCircuitBreakerChange(operationId, key, true);
-		}
-
-		return res;
+		return TryBeginOperation(operationId, key);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -108,11 +112,19 @@ internal sealed partial class DistributedCacheAccessor
 		{
 			if (_logger?.IsEnabled(_options.DistributedCacheSyntheticTimeoutsLogLevel) ?? false)
 				_logger.Log(_options.DistributedCacheSyntheticTimeoutsLogLevel, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] a synthetic timeout occurred while " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
-
 			return;
 		}
 
-		UpdateLastError(operationId, key);
+		// record a failure and check for state transition
+		_breaker.RecordFailure(out var stateChanged);
+		if (stateChanged)
+		{
+			_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			if (_breaker.State == CircuitBreakerState.Open && (_logger?.IsEnabled(LogLevel.Warning) ?? false))
+			{
+				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache temporarily de-activated", _options.CacheName, _options.InstanceId, operationId, key);
+			}
+		}
 
 		if (_logger?.IsEnabled(_options.DistributedCacheErrorsLogLevel) ?? false)
 			_logger.Log(_options.DistributedCacheErrorsLogLevel, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] an error occurred while " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);

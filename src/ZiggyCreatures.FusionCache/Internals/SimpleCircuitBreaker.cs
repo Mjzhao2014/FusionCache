@@ -4,92 +4,156 @@
 /// A simple, reusable circuit-breaker.
 /// </summary>
 internal sealed class SimpleCircuitBreaker
+	: IFusionCacheCircuitBreaker
 {
-	private const int CircuitStateClosed = 0;
-	private const int CircuitStateOpen = 1;
-
-	private int _circuitState;
-	private long _gatewayTicks;
-	private readonly long _breakDurationTicks;
+	private readonly int _failuresAllowedBeforeBreaking;
+	private readonly TimeSpan _breakDuration;
+	private readonly TimeSpan _jitterMaxDuration;
+	// count of consecutive failures while closed
+	private int _failureCount;
+	// when in Open state, the absolute ticks the circuit will remain open until transitioning to half-open
+	private long _openUntilTicks;
+	// an indicator of whether we have consumed the single allowed call in half-open state
+	private int _halfOpenTestInProgress;
+	// state of the circuit breaker (0=Closed,1=Open,2=HalfOpen)
+	private int _state;
 
 	/// <summary>
-	/// Creates a new <see cref="SimpleCircuitBreaker"/> instance.
+	/// Creates a new <see cref="SimpleCircuitBreaker"/> instance that will open after a certain number of consecutive failures.
 	/// </summary>
-	/// <param name="breakDuration">The amount of time the circuit will remain open, when told to.</param>
-	public SimpleCircuitBreaker(TimeSpan breakDuration)
+	/// <param name="failuresAllowedBeforeBreaking">How many consecutive failures are allowed before the circuit will open.</param>
+	/// <param name="breakDuration">The amount of time the circuit will remain open before transitioning to half-open.</param>
+	/// <param name="jitterMaxDuration">An optional maximum duration to add as jitter to the break duration.</param>
+	public SimpleCircuitBreaker(int failuresAllowedBeforeBreaking, TimeSpan breakDuration, TimeSpan jitterMaxDuration = default)
 	{
-		BreakDuration = breakDuration;
-		_breakDurationTicks = BreakDuration.Ticks;
-		_gatewayTicks = DateTimeOffset.MinValue.Ticks;
+		_failuresAllowedBeforeBreaking = failuresAllowedBeforeBreaking < 1 ? 1 : failuresAllowedBeforeBreaking;
+		_breakDuration = breakDuration;
+		_jitterMaxDuration = jitterMaxDuration;
+		_state = (int)CircuitBreakerState.Closed;
+		_failureCount = 0;
+		_openUntilTicks = DateTimeOffset.MinValue.Ticks;
 	}
 
-	/// <summary>
-	/// The amount of time the circuit will remain open, when told to.
-	/// </summary>
-	public TimeSpan BreakDuration { get; private set; }
+	/// <inheritdoc />
+	public CircuitBreakerState State => (CircuitBreakerState)Volatile.Read(ref _state);
 
-	/// <summary>
-	/// Tries to open the circuit.
-	/// </summary>
-	/// <param name="isStateChanged">Indicates if the circuit has been opened with this operation.</param>
-	/// <returns><see langword="true"/> if the circuit is open, either because it was already or because it has been opened with this operation. <see langword="false"/> otherwise.</returns>
-	public bool TryOpen(out bool isStateChanged)
-	{
-		// NO CIRCUIT-BREAKER DURATION
-		if (_breakDurationTicks == 0)
-		{
-			isStateChanged = false;
-			return false;
-		}
+	/// <inheritdoc />
+	public int CurrentFailureCount => Volatile.Read(ref _failureCount);
 
-		Interlocked.Exchange(ref _gatewayTicks, DateTimeOffset.UtcNow.Ticks + _breakDurationTicks);
-
-		// DETECT CIRCUIT STATE CHANGE
-		var oldCircuitState = Interlocked.Exchange(ref _circuitState, CircuitStateOpen);
-
-		isStateChanged = oldCircuitState == CircuitStateClosed;
-		return true;
-	}
-
-	/// <summary>
-	/// Close the circuit.
-	/// </summary>
-	/// <param name="isStateChanged">Indicates if the circuit has been closed with this operation.</param>
-	public void Close(out bool isStateChanged)
-	{
-		Interlocked.Exchange(ref _gatewayTicks, DateTimeOffset.MinValue.Ticks);
-
-		// DETECT CIRCUIT STATE CHANGE
-		var oldCircuitState = Interlocked.Exchange(ref _circuitState, CircuitStateClosed);
-
-		isStateChanged = oldCircuitState == CircuitStateOpen;
-	}
-
-	/// <summary>
-	/// Check if the circuit is closed, or has been closed with this operation.
-	/// </summary>
-	/// <param name="isStateChanged">Indicates if the circuit has been closed with this operation.</param>
-	/// <returns><see langword="true"/> if the circuit is closed, either because it was already closed or because it has been closed with this operation. <see langword="false"/> otherwise.</returns>
-	public bool IsClosed(out bool isStateChanged)
+	/// <inheritdoc />
+	public bool TryExecute(out bool isStateChanged)
 	{
 		isStateChanged = false;
-
-		// NO CIRCUIT-BREAKER DURATION
-		if (_breakDurationTicks == 0)
-			return true;
-
-		long gatewayTicksLocal = Interlocked.Read(ref _gatewayTicks);
-
-		// NOT ENOUGH TIME IS PASSED
-		if (DateTimeOffset.UtcNow.Ticks < gatewayTicksLocal)
-			return false;
-
-		if (_circuitState == CircuitStateOpen)
+		// no circuit breaker configured
+		if (_breakDuration.Ticks == 0)
 		{
-			var oldCircuitState = Interlocked.Exchange(ref _circuitState, CircuitStateClosed);
-			isStateChanged = oldCircuitState == CircuitStateOpen;
+			return true;
 		}
-
-		return true;
+		while (true)
+		{
+			var state = (CircuitBreakerState)Volatile.Read(ref _state);
+			switch (state)
+			{
+				case CircuitBreakerState.Closed:
+					return true;
+				case CircuitBreakerState.Open:
+					// check if open period has elapsed
+					if (DateTimeOffset.UtcNow.Ticks >= Volatile.Read(ref _openUntilTicks))
+					{
+						// transition to half-open if still open
+						if (Interlocked.CompareExchange(ref _state, (int)CircuitBreakerState.HalfOpen, (int)CircuitBreakerState.Open) == (int)CircuitBreakerState.Open)
+						{
+							// reset half-open gating
+							Interlocked.Exchange(ref _halfOpenTestInProgress, 0);
+							isStateChanged = true;
+						}
+						// loop will handle half-open gating
+						continue;
+					}
+					return false;
+				case CircuitBreakerState.HalfOpen:
+					// allow exactly one call through
+					if (Interlocked.CompareExchange(ref _halfOpenTestInProgress, 1, 0) == 0)
+					{
+						return true;
+					}
+					return false;
+				default:
+					return true;
+			}
+		}
 	}
+
+	private TimeSpan GetBreakDurationWithJitter()
+	{
+		var duration = _breakDuration;
+		if (_jitterMaxDuration > TimeSpan.Zero)
+		{
+			// guard against overflow
+			if (duration > (TimeSpan.MaxValue - _jitterMaxDuration))
+				return TimeSpan.MaxValue;
+			duration += TimeSpan.FromMilliseconds(ConcurrentRandom.NextDouble() * _jitterMaxDuration.TotalMilliseconds);
+		}
+		return duration;
+	}
+
+	private void OpenCircuit(out bool isStateChanged)
+	{
+		var breakDuration = GetBreakDurationWithJitter();
+		Interlocked.Exchange(ref _openUntilTicks, DateTimeOffset.UtcNow.Add(breakDuration).Ticks);
+		var oldState = Interlocked.Exchange(ref _state, (int)CircuitBreakerState.Open);
+		isStateChanged = oldState != (int)CircuitBreakerState.Open;
+	}
+
+	/// <inheritdoc />
+	public void RecordFailure(out bool isStateChanged)
+	{
+		isStateChanged = false;
+		var state = (CircuitBreakerState)Volatile.Read(ref _state);
+		if (state == CircuitBreakerState.Closed)
+		{
+			var newCount = Interlocked.Increment(ref _failureCount);
+			if (newCount >= _failuresAllowedBeforeBreaking)
+			{
+				OpenCircuit(out isStateChanged);
+			}
+		}
+		else if (state == CircuitBreakerState.HalfOpen)
+		{
+			// a failure during half-open will trip to open
+			OpenCircuit(out isStateChanged);
+		}
+	}
+
+	/// <inheritdoc />
+	public void RecordSuccess(out bool isStateChanged)
+	{
+		isStateChanged = false;
+		var state = (CircuitBreakerState)Volatile.Read(ref _state);
+		if (state == CircuitBreakerState.Closed)
+		{
+			// reset consecutive failure count
+			Interlocked.Exchange(ref _failureCount, 0);
+		}
+		else if (state == CircuitBreakerState.HalfOpen)
+		{
+			// success in half-open closes the circuit
+			Interlocked.Exchange(ref _failureCount, 0);
+			var oldState = Interlocked.Exchange(ref _state, (int)CircuitBreakerState.Closed);
+			isStateChanged = oldState != (int)CircuitBreakerState.Closed;
+		}
+	}
+
+	/// <inheritdoc />
+	public void Close(out bool isStateChanged)
+	{
+		Interlocked.Exchange(ref _failureCount, 0);
+		var oldState = Interlocked.Exchange(ref _state, (int)CircuitBreakerState.Closed);
+		isStateChanged = oldState != (int)CircuitBreakerState.Closed;
+	}
+
+	/// <summary>
+	/// For backward compatibility, expose the configured break duration.
+	/// </summary>
+	public TimeSpan BreakDuration => _breakDuration;
 }

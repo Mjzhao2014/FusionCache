@@ -8,16 +8,16 @@ internal partial class DistributedCacheAccessor
 {
 	private bool ExecuteOperation(string operationId, string key, Action<CancellationToken> action, string actionDescription, FusionCacheEntryOptions options, CancellationToken token)
 	{
-		//if (IsCurrentlyUsable(operationId, key) == false)
-		//	return false;
-
+		if (TryBeginOperation(operationId, key) == false)
+			return false;
+		var succeeded = false;
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] before " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
 
 			RunUtils.RunSyncActionWithTimeout(action, Timeout.InfiniteTimeSpan, true, token: token);
-
+			succeeded = true;
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
 		}
@@ -43,13 +43,23 @@ internal partial class DistributedCacheAccessor
 
 			return false;
 		}
-
+		finally
+		{
+			if (succeeded)
+			{
+				_breaker.RecordSuccess(out var stateChanged);
+				if (stateChanged)
+				{
+					_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+				}
+			}
+		}
 		return true;
 	}
 
 	public bool SetEntry<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, bool isBackground, CancellationToken token)
 	{
-		if (IsCurrentlyUsable(operationId, key) == false)
+		if (TryBeginOperation(operationId, key) == false)
 			return false;
 
 		token.ThrowIfCancellationRequested();
@@ -137,7 +147,7 @@ internal partial class DistributedCacheAccessor
 		// METRIC
 		Metrics.CounterDistributedGet.Maybe()?.AddWithCommonTags(1, _options.CacheName, _options.InstanceId!);
 
-		if (IsCurrentlyUsable(operationId, key) == false)
+		if (TryBeginOperation(operationId, key) == false)
 			return (null, false);
 
 		if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -187,7 +197,11 @@ internal partial class DistributedCacheAccessor
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed entry not found", _options.CacheName, _options.InstanceId, operationId, key);
 
 			_events.OnMiss(operationId, key, activity);
-
+			_breaker.RecordSuccess(out var stateChanged);
+			if (stateChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			}
 			return (null, false);
 		}
 
@@ -227,6 +241,11 @@ internal partial class DistributedCacheAccessor
 				_events.OnMiss(operationId, key, activity);
 			}
 
+			_breaker.RecordSuccess(out var stateChanged2);
+			if (stateChanged2)
+			{
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+			}
 			return (entry, isValid);
 		}
 		catch (Exception exc)

@@ -188,11 +188,39 @@ public class FusionCacheOptions
 	}
 
 	/// <summary>
-	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
+	/// The duration of the circuit-breaker used when working with the distributed cache.
+	/// When using the simple circuit breaker, this is the amount of time the circuit will remain open when the consecutive failures threshold is reached.
+	/// Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
 	/// </summary>
 	public TimeSpan DistributedCacheCircuitBreakerDuration { get; set; }
+
+	/// <summary>
+	/// When using the simple circuit breaker mode for the distributed cache, the number of consecutive failures allowed before the circuit will open.
+	/// Defaults to 1.
+	/// </summary>
+	public int DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking { get; set; } = 1;
+
+	/// <summary>
+	/// The maximum jitter to add to the distributed cache circuit break duration when opening the circuit.
+	/// </summary>
+	public TimeSpan DistributedCacheCircuitBreakerJitterMaxDuration { get; set; }
+
+	/// <summary>
+	/// When using the advanced circuit breaker mode for the distributed cache, the error rate threshold above which the circuit will open.
+	/// </summary>
+	public double DistributedCacheCircuitBreakerFailureThreshold { get; set; }
+
+	/// <summary>
+	/// The duration of the sample window used to calculate the failure rate for the distributed cache advanced circuit breaker.
+	/// </summary>
+	public TimeSpan DistributedCacheCircuitBreakerSamplingDuration { get; set; }
+
+	/// <summary>
+	/// The minimum number of calls required in the sampling window before evaluating the failure rate for the distributed cache advanced circuit breaker.
+	/// </summary>
+	public int DistributedCacheCircuitBreakerMinimumThroughput { get; set; }
 
 	/// <summary>
 	/// Execute event handlers in a sync fashion, waiting for all of them to complete before moving on.
@@ -220,11 +248,39 @@ public class FusionCacheOptions
 	public CacheKeyModifierMode DistributedCacheKeyModifierMode { get; set; }
 
 	/// <summary>
-	/// The duration of the circuit-breaker used when working with the backplane. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
+	/// The duration of the circuit-breaker used when working with the backplane.
+	/// When using the simple circuit breaker, this is the amount of time the circuit will remain open when the consecutive failures threshold is reached.
+	/// Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Backplane.md"/>
 	/// </summary>
 	public TimeSpan BackplaneCircuitBreakerDuration { get; set; }
+
+	/// <summary>
+	/// When using the simple circuit breaker mode for the backplane, the number of consecutive failures allowed before opening the circuit.
+	/// Defaults to 1.
+	/// </summary>
+	public int BackplaneCircuitBreakerFailuresAllowedBeforeBreaking { get; set; } = 1;
+
+	/// <summary>
+	/// The maximum jitter to add to the backplane circuit breaker duration when opening the circuit.
+	/// </summary>
+	public TimeSpan BackplaneCircuitBreakerJitterMaxDuration { get; set; }
+
+	/// <summary>
+	/// Advanced circuit breaker error rate threshold for backplane operations.
+	/// </summary>
+	public double BackplaneCircuitBreakerFailureThreshold { get; set; }
+
+	/// <summary>
+	/// The sampling window duration over which backplane calls are counted for the advanced circuit breaker.
+	/// </summary>
+	public TimeSpan BackplaneCircuitBreakerSamplingDuration { get; set; }
+
+	/// <summary>
+	/// The minimum throughput required within the sampling window before evaluating the backplane advanced circuit breaker failure rate.
+	/// </summary>
+	public int BackplaneCircuitBreakerMinimumThroughput { get; set; }
 
 	/// <summary>
 	/// The prefix to use in the backplane channel name: if not specified the <see cref="CacheName"/> will be used.
@@ -555,13 +611,23 @@ public class FusionCacheOptions
 			AutoRecoveryMaxItems = AutoRecoveryMaxItems,
 			AutoRecoveryMaxRetryCount = AutoRecoveryMaxRetryCount,
 
-			BackplaneChannelPrefix = BackplaneChannelPrefix,
-			IgnoreIncomingBackplaneNotifications = IgnoreIncomingBackplaneNotifications,
-			BackplaneCircuitBreakerDuration = BackplaneCircuitBreakerDuration,
-			WaitForInitialBackplaneSubscribe = WaitForInitialBackplaneSubscribe,
+		BackplaneChannelPrefix = BackplaneChannelPrefix,
+		IgnoreIncomingBackplaneNotifications = IgnoreIncomingBackplaneNotifications,
+		BackplaneCircuitBreakerDuration = BackplaneCircuitBreakerDuration,
+		BackplaneCircuitBreakerFailuresAllowedBeforeBreaking = BackplaneCircuitBreakerFailuresAllowedBeforeBreaking,
+		BackplaneCircuitBreakerJitterMaxDuration = BackplaneCircuitBreakerJitterMaxDuration,
+		BackplaneCircuitBreakerFailureThreshold = BackplaneCircuitBreakerFailureThreshold,
+		BackplaneCircuitBreakerSamplingDuration = BackplaneCircuitBreakerSamplingDuration,
+		BackplaneCircuitBreakerMinimumThroughput = BackplaneCircuitBreakerMinimumThroughput,
+		WaitForInitialBackplaneSubscribe = WaitForInitialBackplaneSubscribe,
 
-			DistributedCacheKeyModifierMode = DistributedCacheKeyModifierMode,
-			DistributedCacheCircuitBreakerDuration = DistributedCacheCircuitBreakerDuration,
+		DistributedCacheKeyModifierMode = DistributedCacheKeyModifierMode,
+		DistributedCacheCircuitBreakerDuration = DistributedCacheCircuitBreakerDuration,
+		DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking,
+		DistributedCacheCircuitBreakerJitterMaxDuration = DistributedCacheCircuitBreakerJitterMaxDuration,
+		DistributedCacheCircuitBreakerFailureThreshold = DistributedCacheCircuitBreakerFailureThreshold,
+		DistributedCacheCircuitBreakerSamplingDuration = DistributedCacheCircuitBreakerSamplingDuration,
+		DistributedCacheCircuitBreakerMinimumThroughput = DistributedCacheCircuitBreakerMinimumThroughput,
 
 			EnableSyncEventHandlersExecution = EnableSyncEventHandlersExecution,
 
