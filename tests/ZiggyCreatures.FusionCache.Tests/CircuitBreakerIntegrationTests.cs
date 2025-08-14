@@ -294,7 +294,8 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 	{
 		// Test that distributed cache and backplane circuit breakers have independent jitter
 		var maxFailuresBeforeBreaking = 1;
-		var durationOfBreak = TimeSpan.FromMilliseconds(200);
+		var distributedCacheDurationOfBreak = TimeSpan.FromMilliseconds(200);
+		var backplaneDurationOfBreak = TimeSpan.FromMilliseconds(500);
 		var distributedCacheJitter = TimeSpan.FromMilliseconds(50);
 		var backplaneJitter = TimeSpan.FromMilliseconds(500);
 		var backplaneConnectionId = "test-connection";
@@ -309,12 +310,12 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		options.EnableAutoRecovery = false;
 		// Different jitter for each circuit breaker
 		options.DistributedCacheCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-		options.DistributedCacheCircuitBreakerDuration = durationOfBreak;
+		options.DistributedCacheCircuitBreakerDuration = distributedCacheDurationOfBreak;
 		options.DistributedCacheCircuitBreakerJitterMaxDuration = distributedCacheJitter;
 		options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
-		options.BackplaneCircuitBreakerDuration = durationOfBreak;
+		options.BackplaneCircuitBreakerDuration = backplaneDurationOfBreak;
 		options.BackplaneCircuitBreakerJitterMaxDuration = backplaneJitter;
-		
+
 		using var fusionCache = new FusionCache(options, memoryCache);
 		fusionCache.DefaultEntryOptions.AllowBackgroundDistributedCacheOperations = false;
 		fusionCache.DefaultEntryOptions.AllowBackgroundBackplaneOperations = false;
@@ -337,17 +338,23 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		chaosDistributedCache.SetNeverThrow();
 		chaosBackplane.SetNeverThrow();
 
-		// Wait for base duration only - both should still be open due to jitter
-		await Task.Delay(durationOfBreak);
+		// Wait for base duration only given 50ms leeway - both should still be open due to jitter
+		await Task.Delay(distributedCacheDurationOfBreak.Add(TimeSpan.FromMilliseconds(-50)));
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
 
 		// Wait for distributed cache jitter to potentially expire but not backplane
-		await Task.Delay(distributedCacheJitter.Add(TimeSpan.FromMilliseconds(25)));
+		await Task.Delay(distributedCacheJitter.Add(TimeSpan.FromMilliseconds(50)));
 
 		// Test that jitter configuration is respected (operations should complete without errors)
 		await fusionCache.SetAsync(key + "2", value);
+		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
+		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
+
+		// Wait for backplane jitter to potentially expire
+		await Task.Delay(backplaneDurationOfBreak.Add(backplaneJitter).PlusALittleBit());
 		await fusionCache.SetAsync(key + "3", value);
+		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
 	}
 
 	[Theory]
