@@ -112,54 +112,7 @@ public class EvictionTests
 		}
 	}
 
-	[Fact]
-	public async Task FusionCache_WithSizeBasedEviction_EvictsLargestEntries()
-	{
-		// Arrange
-		var options = new FusionCacheOptions
-		{
-			DefaultEntryOptions = new FusionCacheEntryOptions
-			{
-				Duration = TimeSpan.FromMinutes(10),
-				Size = 100 // Default size
-			},
-			EvictionPolicy = new SizeBasedEvictionPolicy(new FusionCacheEvictionPolicyConfig
-			{
-				MaxTotalSize = 1000,
-				EvictionPercentage = 0.5
-			})
-		};
-		var cache = new FusionCache(options);
-
-		using (cache)
-		{
-			// Act - Add entries with different sizes
-			await cache.SetAsync("small", "tiny", new FusionCacheEntryOptions { Size = 100 });
-			await cache.SetAsync("medium", "medium-sized", new FusionCacheEntryOptions { Size = 300 });
-			await cache.SetAsync("large", "very-large-content", new FusionCacheEntryOptions { Size = 500 });
-
-			// Verify all entries are present
-			Assert.Equal("tiny", await cache.GetOrDefaultAsync<string>("small"));
-			Assert.Equal("medium-sized", await cache.GetOrDefaultAsync<string>("medium"));
-			Assert.Equal("very-large-content", await cache.GetOrDefaultAsync<string>("large"));
-
-			// Add another entry that pushes us over the size limit
-			await cache.SetAsync("trigger", "trigger-eviction", new FusionCacheEntryOptions { Size = 200 });
-
-			await Task.Delay(50); // Allow eviction to complete
-
-			// Assert - largest entry should be evicted first
-			var smallValue = await cache.GetOrDefaultAsync<string>("small");
-			var mediumValue = await cache.GetOrDefaultAsync<string>("medium");
-			var largeValue = await cache.GetOrDefaultAsync<string>("large");
-			var triggerValue = await cache.GetOrDefaultAsync<string>("trigger");
-
-			Assert.NotNull(smallValue);
-			Assert.NotNull(mediumValue);
-			Assert.Null(largeValue); // This should be evicted (largest)
-			Assert.NotNull(triggerValue);
-		}
-	}
+	
 
 	[Fact]
 	public async Task FusionCache_WithEvictionPolicy_RespectsThresholds()

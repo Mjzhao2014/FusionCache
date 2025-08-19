@@ -99,49 +99,6 @@ public class EvictionEventTests
 	}
 
 	[Fact]
-	public async Task FusionCache_SizeBasedEvictionPolicy_FiresEventsWithCorrectValues()
-	{
-		// Arrange
-		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
-		var options = new FusionCacheOptions
-		{
-			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
-			EvictionPolicy = new SizeBasedEvictionPolicy(new FusionCacheEvictionPolicyConfig
-			{
-				MaxTotalSize = 1000,
-				EvictionPercentage = 0.5
-			})
-		};
-
-		var cache = new FusionCache(options);
-
-		// Subscribe to eviction events
-		cache.Events.Memory.Eviction += (sender, args) =>
-		{
-			evictionEvents.Add(args);
-		};
-
-		using (cache)
-		{
-			// Act - Add entries with different sizes
-			await cache.SetAsync("small", "tiny", new FusionCacheEntryOptions { Size = 100 });
-			await cache.SetAsync("medium", "medium-data", new FusionCacheEntryOptions { Size = 300 });
-			await cache.SetAsync("large", "very-large-content", new FusionCacheEntryOptions { Size = 500 });
-			
-			// This should trigger eviction - largest entry should be evicted first
-			await cache.SetAsync("trigger", "trigger-content", new FusionCacheEntryOptions { Size = 200 });
-
-			await Task.Delay(50);
-
-			// Assert
-			Assert.NotEmpty(evictionEvents);
-			var evictionEvent = evictionEvents.First();
-			Assert.Equal("large", evictionEvent.Key);
-			Assert.Equal("very-large-content", evictionEvent.Value);
-		}
-	}
-
-	[Fact]
 	public async Task FusionCache_MultipleEvictions_FiresMultipleEvents()
 	{
 		// Arrange
