@@ -118,8 +118,8 @@ public class EvictionTests
 		// Arrange
 		var options = new FusionCacheOptions
 		{
-			DefaultEntryOptions = new FusionCacheEntryOptions 
-			{ 
+			DefaultEntryOptions = new FusionCacheEntryOptions
+			{
 				Duration = TimeSpan.FromMinutes(10),
 				Size = 100 // Default size
 			},
@@ -209,7 +209,7 @@ public class EvictionTests
 
 			// Should have evicted approximately 30% of 8 = ~2-3 entries
 			// So we should have 5-6 entries remaining
-			Assert.True(remainingCount >= 5 && remainingCount <= 6, 
+			Assert.True(remainingCount >= 5 && remainingCount <= 6,
 				$"Expected 5-6 remaining entries, but found {remainingCount}");
 		}
 	}
@@ -250,8 +250,8 @@ public class EvictionTests
 		// Arrange
 		var options = new FusionCacheOptions
 		{
-			DefaultEntryOptions = new FusionCacheEntryOptions 
-			{ 
+			DefaultEntryOptions = new FusionCacheEntryOptions
+			{
 				Duration = TimeSpan.FromMinutes(10),
 				AllowBackgroundDistributedCacheOperations = true
 			},
@@ -291,12 +291,4 @@ public class EvictionTests
 			Assert.True(presentCount <= 5, $"Expected at most 5 entries, but found {presentCount}");
 		}
 	}
-
-	// NOTE: This test is commented out because it requires integration with the FusionCacheBuilder
-	// which would need to be done as part of the main FusionCache integration
-	//[Fact]
-	//public void EvictionExtensions_ConfigureCorrectly()
-	//{
-	//	// Test would verify that extension methods work correctly with the builder
-	//}
 }
