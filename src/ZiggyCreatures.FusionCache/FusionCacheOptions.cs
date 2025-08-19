@@ -114,6 +114,9 @@ public class FusionCacheOptions
 		PluginsInfoLogLevel = LogLevel.Information;
 		PluginsErrorsLogLevel = LogLevel.Error;
 		MissingCacheKeyPrefixWarningLogLevel = LogLevel.Warning;
+
+		// EVICTION POLICY
+		EvictionPolicy = null;
 	}
 
 	/// <summary>
@@ -165,6 +168,12 @@ public class FusionCacheOptions
 			_defaultEntryOptions = value;
 		}
 	}
+
+	/// <summary>
+	/// The eviction policy to use for the in-memory (L1) cache, if any.
+	/// When not set, no automatic capacity-based eviction will be performed beyond the underlying memory cache defaults.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
 
 	/// <summary>
 	/// The default <see cref="FusionCacheEntryOptions"/> to use for the tag expiration data when none will be specified, and as the starting point when duplicating one.
@@ -596,8 +605,11 @@ public class FusionCacheOptions
 			PluginsErrorsLogLevel = PluginsErrorsLogLevel,
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
-			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
-		};
+		MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+
+		// EVICTION POLICY
+		EvictionPolicy = EvictionPolicy
+	};
 
 		return res;
 	}

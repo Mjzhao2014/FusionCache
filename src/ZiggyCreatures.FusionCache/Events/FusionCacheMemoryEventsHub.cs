@@ -50,6 +50,21 @@ public sealed class FusionCacheMemoryEventsHub
 		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
 	}
 
+	/// <summary>
+	/// Method to raise an eviction event when a cache entry has been removed due to a configured eviction policy.
+	/// </summary>
+	/// <param name="operationId">The current operation id.</param>
+	/// <param name="key">The key being evicted.</param>
+	/// <param name="policyName">The name of the policy responsible for the eviction.</param>
+	/// <param name="value">The evicted entry value, if any.</param>
+	internal void OnPolicyEviction(string operationId, string key, string policyName, object? value)
+	{
+		// METRIC: tag the policy name as the reason
+		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, policyName));
+		// we reuse the Eviction event args with EvictionReason.None
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, EvictionReason.None, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+	}
+
 	internal void OnExpire(string operationId, string key)
 	{
 		// METRIC

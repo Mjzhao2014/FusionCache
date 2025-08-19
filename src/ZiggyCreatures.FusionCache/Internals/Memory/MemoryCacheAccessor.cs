@@ -2,6 +2,8 @@
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Events;
+using ZiggyCreatures.Caching.Fusion.Internals;
+using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
 using ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 
@@ -29,6 +31,9 @@ internal sealed class MemoryCacheAccessor
 		_options = options;
 		_logger = logger;
 		_events = events;
+
+		// store reference to any configured eviction policy
+		_evictionPolicy = options.EvictionPolicy;
 	}
 
 	private IMemoryCache _cache;
@@ -37,6 +42,7 @@ internal sealed class MemoryCacheAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheMemoryEventsHub _events;
+	private readonly IFusionCacheEvictionPolicy? _evictionPolicy;
 
 	public void UpdateEntryFromDistributedEntry<TValue>(string operationId, string key, FusionCacheMemoryEntry<TValue> memoryEntry, FusionCacheDistributedEntry<TValue> distributedEntry)
 	{
@@ -81,6 +87,11 @@ internal sealed class MemoryCacheAccessor
 				throw new InvalidOperationException("No MemoryCacheEntryOptions or AbsoluteExpiration was determined: this should not be possible, WTH!?");
 			}
 
+			// update policy state
+			_evictionPolicy?.OnSet(key, entry.Metadata);
+			// perform any eviction if thresholds exceeded
+			EvictIfNeeded(operationId);
+
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -103,6 +114,10 @@ internal sealed class MemoryCacheAccessor
 		try
 		{
 			var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
+			if (entry is not null)
+			{
+				_evictionPolicy?.OnGet(key);
+			}
 
 			// EVENT
 			if (entry is not null)
@@ -147,10 +162,14 @@ internal sealed class MemoryCacheAccessor
 			}
 			else
 			{
-				if (entry.IsLogicallyExpired())
+					if (entry.IsLogicallyExpired())
 				{
 					if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 						_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] memory entry found (expired) {Entry}", _options.CacheName, _options.InstanceId, operationId, key, entry.ToLogString(_options.IncludeTagsInLogs));
+				}
+				if (entry is not null)
+				{
+					_evictionPolicy?.OnGet(key);
 				}
 				else
 				{
@@ -192,6 +211,7 @@ internal sealed class MemoryCacheAccessor
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
 			_cache.Remove(key);
+			_evictionPolicy?.OnRemove(key);
 
 			// EVENT
 			_events.OnRemove(operationId, key);
@@ -294,5 +314,20 @@ internal sealed class MemoryCacheAccessor
 	public void Dispose()
 	{
 		Dispose(true);
+	}
+
+	private void EvictIfNeeded(string operationId)
+	{
+		if (_evictionPolicy is null)
+			return;
+		foreach (var evictKey in _evictionPolicy.GetKeysToEvict())
+		{
+			if (_cache.TryGetValue<IFusionCacheMemoryEntry>(evictKey, out var entry))
+			{
+				_cache.Remove(evictKey);
+				_evictionPolicy.OnRemove(evictKey);
+				_events.OnPolicyEviction(operationId, evictKey, _evictionPolicy.Name, entry?.Value);
+			}
+		}
 	}
 }
