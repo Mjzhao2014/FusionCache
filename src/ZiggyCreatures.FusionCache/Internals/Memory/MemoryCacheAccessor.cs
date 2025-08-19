@@ -83,6 +83,19 @@ internal sealed class MemoryCacheAccessor
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			// update eviction policy tracking and evict if needed
+			if (_options.EvictionPolicy is not null)
+			{
+				// track insertion
+				_options.EvictionPolicy.OnSet(key, entry.Metadata?.Size);
+				// compute any keys to evict
+				var toEvict = _options.EvictionPolicy.GetEvictionCandidates();
+				foreach (var evictKey in toEvict)
+				{
+					// remove from memory and raise policy eviction event
+					RemoveEntryDueToPolicy(operationId, evictKey, _options.EvictionPolicy.Name);
+				}
+			}
 		}
 		catch (Exception exc)
 		{
@@ -108,6 +121,8 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
+				// update eviction policy recency/frequency
+				_options.EvictionPolicy?.OnAccess(key);
 			}
 			else
 			{
@@ -140,8 +155,8 @@ internal sealed class MemoryCacheAccessor
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] trying to get from memory", _options.CacheName, _options.InstanceId, operationId, key);
 
-			if (_cache.TryGetValue<IFusionCacheMemoryEntry>(key, out entry) == false)
-			{
+				if (_cache.TryGetValue<IFusionCacheMemoryEntry>(key, out entry) == false)
+				{
 				if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 					_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] memory entry not found", _options.CacheName, _options.InstanceId, operationId, key);
 			}
@@ -161,15 +176,17 @@ internal sealed class MemoryCacheAccessor
 				}
 			}
 
-			// EVENT
-			if (entry is not null)
-			{
-				_events.OnHit(operationId, key, isValid == false, activity);
-			}
-			else
-			{
-				_events.OnMiss(operationId, key, activity);
-			}
+				// EVENT
+				if (entry is not null)
+				{
+					_events.OnHit(operationId, key, isValid == false, activity);
+					// update eviction policy recency/frequency
+					_options.EvictionPolicy?.OnAccess(key);
+				}
+				else
+				{
+					_events.OnMiss(operationId, key, activity);
+				}
 
 			return (entry, isValid);
 		}
@@ -183,18 +200,37 @@ internal sealed class MemoryCacheAccessor
 
 	public void RemoveEntry(string operationId, string key)
 	{
+		RemoveEntryInternal(operationId, key, dueToPolicy: false, policyName: null);
+	}
+
+	private void RemoveEntryDueToPolicy(string operationId, string key, string policyName)
+	{
+		RemoveEntryInternal(operationId, key, dueToPolicy: true, policyName: policyName);
+	}
+
+	private void RemoveEntryInternal(string operationId, string key, bool dueToPolicy, string? policyName)
+	{
 		// ACTIVITY
 		using var activity = Activities.SourceMemoryLevel.StartActivityWithCommonTags(Activities.Names.MemoryRemove, _options.CacheName, _options.InstanceId!, key, operationId, CacheLevelKind.Memory);
-
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
-
+			// try get value before removing to send along in event
+			IFusionCacheMemoryEntry? entry = null;
+			_cache.TryGetValue<IFusionCacheMemoryEntry>(key, out entry);
 			_cache.Remove(key);
-
-			// EVENT
-			_events.OnRemove(operationId, key);
+			if (dueToPolicy)
+			{
+				// we already updated internal policy state in GetEvictionCandidates; just fire policy eviction event
+				_events.OnPolicyEviction(operationId, key, policyName ?? string.Empty, entry?.Value);
+			}
+			else
+			{
+				// update policy tracking for explicit removals
+				_options.EvictionPolicy?.OnRemove(key);
+				_events.OnRemove(operationId, key);
+			}
 		}
 		catch (Exception exc)
 		{

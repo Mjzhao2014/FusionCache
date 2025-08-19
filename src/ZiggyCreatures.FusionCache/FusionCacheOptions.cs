@@ -114,6 +114,8 @@ public class FusionCacheOptions
 		PluginsInfoLogLevel = LogLevel.Information;
 		PluginsErrorsLogLevel = LogLevel.Error;
 		MissingCacheKeyPrefixWarningLogLevel = LogLevel.Warning;
+		// Eviction policy optional, by default no custom policy
+		EvictionPolicy = null;
 	}
 
 	/// <summary>
@@ -186,6 +188,13 @@ public class FusionCacheOptions
 			_tagsDefaultEntryOptions = value;
 		}
 	}
+
+	/// <summary>
+	/// Optional eviction policy for the L1 (memory) cache. When specified, the cache will track entries and automatically evict
+	/// them according to the implemented policy when capacity thresholds are exceeded. By default (<see langword="null"/>),
+	/// no custom eviction policy will run and the underlying memory cache controls eviction.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
 
 	/// <summary>
 	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
@@ -597,6 +606,7 @@ public class FusionCacheOptions
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+			EvictionPolicy = EvictionPolicy,
 		};
 
 		return res;
