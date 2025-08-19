@@ -50,6 +50,17 @@ public sealed class FusionCacheMemoryEventsHub
 		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
 	}
 
+	internal void OnPolicyEviction(string operationId, string key, string policyName, object? value)
+	{
+		// METRIC - Use a specific eviction reason for policy-based evictions
+		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, 
+			new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, "Policy"),
+			new KeyValuePair<string, object?>("EvictionPolicy", policyName));
+
+		// Fire eviction event with Policy reason
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, EvictionReason.Replaced, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+	}
+
 	internal void OnExpire(string operationId, string key)
 	{
 		// METRIC

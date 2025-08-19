@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ZiggyCreatures.Caching.Fusion.Eviction;
 
 namespace ZiggyCreatures.Caching.Fusion;
 
@@ -489,6 +490,16 @@ public class FusionCacheOptions
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Logging.md"/>
 	/// </summary>
 	public LogLevel EventHandlingErrorsLogLevel { get; set; }
+
+	/// <summary>
+	/// The eviction policy to use for L1 (memory) cache entries.
+	/// When specified, enables automatic eviction of cache entries based on the policy's algorithm
+	/// when capacity limits are reached.
+	/// <br/><br/>
+	/// <strong>NOTE:</strong> This is an opt-in feature. If not specified, no automatic eviction will occur
+	/// and the cache will rely on the underlying IMemoryCache behavior for memory management.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
 
 	/// <summary>
 	/// Specify the <see cref="LogLevel"/> to use when a synthetic timeout occurs during a backplane cache operation.
