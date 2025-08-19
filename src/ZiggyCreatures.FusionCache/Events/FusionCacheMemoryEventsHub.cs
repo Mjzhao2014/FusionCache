@@ -29,6 +29,17 @@ public sealed class FusionCacheMemoryEventsHub
 	public event EventHandler<FusionCacheEntryEvictionEventArgs>? Eviction;
 
 	/// <summary>
+	/// An event fired when an eviction policy proactively removes an item from the cache due to capacity constraints.
+	/// This will be raised in addition to the standard Eviction event.
+	/// </summary>
+	internal void OnPolicyEviction(string operationId, string key, string policyName, object? value)
+	{
+		// METRIC: treat as eviction with policy-specific tag
+		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, policyName));
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, EvictionReason.Capacity, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+	}
+
+	/// <summary>
 	/// The event for a manual cache Expire() call.
 	/// </summary>
 	public event EventHandler<FusionCacheEntryEventArgs>? Expire;

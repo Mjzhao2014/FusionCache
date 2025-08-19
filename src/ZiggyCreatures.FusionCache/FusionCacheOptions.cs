@@ -114,6 +114,9 @@ public class FusionCacheOptions
 		PluginsInfoLogLevel = LogLevel.Information;
 		PluginsErrorsLogLevel = LogLevel.Error;
 		MissingCacheKeyPrefixWarningLogLevel = LogLevel.Warning;
+
+		// EVICTION POLICY
+		EvictionPolicy = null;
 	}
 
 	/// <summary>
@@ -186,6 +189,12 @@ public class FusionCacheOptions
 			_tagsDefaultEntryOptions = value;
 		}
 	}
+
+	/// <summary>
+	/// Optional in-memory eviction policy controlling automatic removal of entries
+	/// once capacity limits are reached.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
 
 	/// <summary>
 	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
@@ -576,6 +585,9 @@ public class FusionCacheOptions
 			DisableTagging = DisableTagging,
 
 			SkipAutoCloneForImmutableObjects = SkipAutoCloneForImmutableObjects,
+
+			// EVICTION
+			EvictionPolicy = EvictionPolicy,
 
 			// LOG LEVELS
 			IncoherentOptionsNormalizationLogLevel = IncoherentOptionsNormalizationLogLevel,

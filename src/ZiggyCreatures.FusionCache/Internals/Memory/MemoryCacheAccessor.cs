@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Events;
+using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
 using ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 
@@ -29,6 +30,7 @@ internal sealed class MemoryCacheAccessor
 		_options = options;
 		_logger = logger;
 		_events = events;
+		_evictionPolicy = options.EvictionPolicy;
 	}
 
 	private IMemoryCache _cache;
@@ -37,6 +39,7 @@ internal sealed class MemoryCacheAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheMemoryEventsHub _events;
+	private readonly IFusionCacheEvictionPolicy? _evictionPolicy;
 
 	public void UpdateEntryFromDistributedEntry<TValue>(string operationId, string key, FusionCacheMemoryEntry<TValue> memoryEntry, FusionCacheDistributedEntry<TValue> distributedEntry)
 	{
@@ -83,6 +86,11 @@ internal sealed class MemoryCacheAccessor
 
 			// EVENT
 			_events.OnSet(operationId, key);
+
+			// UPDATE POLICY
+			// use entry size metadata when available
+			_evictionPolicy?.OnSet(key, (long)(entry.Metadata?.Size ?? 1));
+			_evictionPolicy?.ApplyPolicy(_cache, _events, operationId);
 		}
 		catch (Exception exc)
 		{
@@ -108,6 +116,7 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
+				_evictionPolicy?.OnAccess(key);
 			}
 			else
 			{
@@ -165,6 +174,7 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, isValid == false, activity);
+				_evictionPolicy?.OnAccess(key);
 			}
 			else
 			{
@@ -195,6 +205,7 @@ internal sealed class MemoryCacheAccessor
 
 			// EVENT
 			_events.OnRemove(operationId, key);
+			_evictionPolicy?.OnRemove(key);
 		}
 		catch (Exception exc)
 		{
