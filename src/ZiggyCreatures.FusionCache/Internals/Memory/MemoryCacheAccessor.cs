@@ -51,6 +51,8 @@ internal sealed class MemoryCacheAccessor
 		if (skipPhysicalSet)
 			return;
 
+		// L1 eviction policy update will occur after physical set
+
 		// IF FAIL-SAFE IS DISABLED AND DURATION IS <= ZERO -> REMOVE ENTRY (WILL SAVE RESOURCES)
 		if (options.IsFailSafeEnabled == false && options.Duration <= TimeSpan.Zero)
 		{
@@ -83,12 +85,41 @@ internal sealed class MemoryCacheAccessor
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			// POLICY UPDATE
+			_options.EvictionPolicy?.OnSet(key, entry.Metadata);
+			// TRIGGER EVICTION IF NEEDED
+			EvictIfNeeded(operationId);
 		}
 		catch (Exception exc)
 		{
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			activity?.AddException(exc);
 			throw;
+		}
+	}
+
+	private void EvictIfNeeded(string operationId)
+	{
+		var policy = _options.EvictionPolicy;
+		if (policy is null)
+			return;
+		var keysToEvict = policy.GetKeysToEvict();
+		foreach (var key in keysToEvict)
+		{
+			// try to remove the entry from memory and update policy/event
+			IFusionCacheMemoryEntry? entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
+			if (entry is not null)
+			{
+				// update policy structures before removal
+				policy.OnRemove(key);
+				_cache.Remove(key);
+				_events.OnPolicyEviction(operationId, key, policy.Name, entry.Value);
+			}
+			else
+			{
+				// ensure policy internal structures consistent
+				policy.OnRemove(key);
+			}
 		}
 	}
 
@@ -103,6 +134,11 @@ internal sealed class MemoryCacheAccessor
 		try
 		{
 			var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
+			// POLICY UPDATE ON HIT
+			if (entry is not null)
+			{
+				_options.EvictionPolicy?.OnGet(key);
+			}
 
 			// EVENT
 			if (entry is not null)
@@ -159,6 +195,8 @@ internal sealed class MemoryCacheAccessor
 
 					isValid = true;
 				}
+				// POLICY UPDATE ON HIT
+				_options.EvictionPolicy?.OnGet(key);
 			}
 
 			// EVENT
@@ -188,13 +226,15 @@ internal sealed class MemoryCacheAccessor
 
 		try
 		{
-			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
-				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
+				if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
+					_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
 			_cache.Remove(key);
-
+			
 			// EVENT
 			_events.OnRemove(operationId, key);
+			// POLICY UPDATE
+			_options.EvictionPolicy?.OnRemove(key);
 		}
 		catch (Exception exc)
 		{

@@ -48,6 +48,15 @@ public sealed class FusionCacheMemoryEventsHub
 		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()));
 
 		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+		// UPDATE POLICY ON EVICTION
+		_options.EvictionPolicy?.OnRemove(key);
+	}
+
+	internal void OnPolicyEviction(string operationId, string key, string policyName, object? value)
+	{
+		// Fire eviction event for policy-driven eviction
+		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, policyName));
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, EvictionReason.Capacity, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
 	}
 
 	internal void OnExpire(string operationId, string key)

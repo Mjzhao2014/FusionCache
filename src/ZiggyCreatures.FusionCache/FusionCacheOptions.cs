@@ -188,6 +188,12 @@ public class FusionCacheOptions
 	}
 
 	/// <summary>
+	/// Optional in-memory eviction policy that can be used to automatically evict items from the memory cache when capacity thresholds are reached.
+	/// If null (default), no eviction beyond the underlying memory cache's own behavior will be performed.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
+
+	/// <summary>
 	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
