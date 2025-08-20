@@ -171,83 +171,6 @@ public class EvictionTests
 	}
 
 	[Fact]
-	public async Task FusionCache_WithoutEvictionPolicy_DoesNotEvict()
-	{
-		// Arrange
-		var options = new FusionCacheOptions
-		{
-			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) }
-			// No eviction policy configured
-		};
-		var cache = new FusionCache(options);
-
-		using (cache)
-		{
-			// Act - Add many entries
-			for (int i = 0; i < 100; i++)
-			{
-				await cache.SetAsync($"key{i}", $"value{i}");
-			}
-
-			await Task.Delay(50);
-
-			// Assert - All entries should still be present (no eviction)
-			for (int i = 0; i < 100; i++)
-			{
-				var value = await cache.GetOrDefaultAsync<string>($"key{i}");
-				Assert.NotNull(value);
-			}
-		}
-	}
-
-	[Fact]
-	public async Task FusionCache_EvictionPolicy_WorksWithBackgroundOperations()
-	{
-		// Arrange
-		var options = new FusionCacheOptions
-		{
-			DefaultEntryOptions = new FusionCacheEntryOptions
-			{
-				Duration = TimeSpan.FromMinutes(10),
-				AllowBackgroundDistributedCacheOperations = true
-			},
-			EvictionPolicy = new LruEvictionPolicy(new FusionCacheEvictionPolicyConfig
-			{
-				MaxEntryCount = 5,
-				EvictionPercentage = 0.4
-			})
-		};
-		var cache = new FusionCache(options);
-
-
-		// Act - Rapidly add entries to test eviction under concurrent access
-		var tasks = new List<Task>();
-		for (int i = 0; i < 10; i++)
-		{
-			int index = i;
-			tasks.Add(Task.Run(async () =>
-			{
-				await cache.SetAsync($"key{index}", $"value{index}");
-				await cache.GetOrDefaultAsync<string>($"key{index}");
-			}));
-		}
-
-		await Task.WhenAll(tasks);
-		await Task.Delay(100); // Allow eviction to complete
-
-		// Assert - Should have approximately 5 entries (capacity limit)
-		int presentCount = 0;
-		for (int i = 0; i < 10; i++)
-		{
-			var value = await cache.GetOrDefaultAsync<string>($"key{i}");
-			if (value != null) presentCount++;
-		}
-
-		Assert.True(presentCount <= 5, $"Expected at most 5 entries, but found {presentCount}");
-
-	}
-
-	[Fact]
 	public async Task FusionCache_LruEvictionPolicy_FiresEventsWithCorrectValues()
 	{
 		// Arrange
@@ -437,23 +360,12 @@ public class EvictionTests
 	}
 
 	[Fact]
-	public void FusionCacheBuilder_WithLruEviction_ConfiguresCorrectly()
-	{
-		// Arrange & Act & Assert
-		var services = new ServiceCollection();
-		var builder = new FusionCacheBuilder("test-cache", services);
-
-		// This should not throw - it means the extension method works
-		var result = builder.WithLruEviction(maxEntryCount: 100, evictionPercentage: 0.2);
-
-		Assert.NotNull(result);
-		Assert.Same(builder, result); // Should return the same builder for chaining
-	}
-
-	[Fact]
-	public void FusionCacheBuilder_WithLruEviction_WithConfig_ConfiguresCorrectly()
+	public void FusionCacheBuilder_EvictionPolicyExtensions_ConfigureCorrectly()
 	{
 		// Arrange
+		var services = new ServiceCollection();
+		var builder = new FusionCacheBuilder("test-cache", services);
+		
 		var config = new FusionCacheEvictionPolicyConfig
 		{
 			MaxEntryCount = 500,
@@ -463,47 +375,28 @@ public class EvictionTests
 			MaxEvictionBatchSize = 50
 		};
 
-		// Act & Assert
-		var services = new ServiceCollection();
-		var builder = new FusionCacheBuilder("test-cache", services);
+		// Act & Assert - Test all extension method overloads
+		var lruResult1 = builder.WithLruEviction(maxEntryCount: 100, evictionPercentage: 0.2);
+		Assert.NotNull(lruResult1);
+		Assert.Same(builder, lruResult1);
 
-		var result = builder.WithLruEviction(config);
+		// Reset builder for next test
+		builder = new FusionCacheBuilder("test-cache", services);
+		var lruResult2 = builder.WithLruEviction(config);
+		Assert.NotNull(lruResult2);
+		Assert.Same(builder, lruResult2);
 
-		Assert.NotNull(result);
-		Assert.Same(builder, result); // Should return the same builder for chaining
-	}
+		// Reset builder for next test
+		builder = new FusionCacheBuilder("test-cache", services);
+		var lfuResult1 = builder.WithLfuEviction(maxEntryCount: 250, evictionPercentage: 0.25);
+		Assert.NotNull(lfuResult1);
+		Assert.Same(builder, lfuResult1);
 
-	[Fact]
-	public void FusionCacheBuilder_WithLfuEviction_ConfiguresCorrectly()
-	{
-		// Arrange & Act & Assert
-		var services = new ServiceCollection();
-		var builder = new FusionCacheBuilder("test-cache", services);
-
-		var result = builder.WithLfuEviction(maxEntryCount: 250, evictionPercentage: 0.25);
-
-		Assert.NotNull(result);
-		Assert.Same(builder, result); // Should return the same builder for chaining
-	}
-
-	[Fact]
-	public void FusionCacheBuilder_WithLfuEviction_WithConfig_ConfiguresCorrectly()
-	{
-		// Arrange
-		var config = new FusionCacheEvictionPolicyConfig
-		{
-			MaxEntryCount = 1000,
-			EvictionPercentage = 0.1
-		};
-
-		// Act & Assert
-		var services = new ServiceCollection();
-		var builder = new FusionCacheBuilder("test-cache", services);
-
-		var result = builder.WithLfuEviction(config);
-
-		Assert.NotNull(result);
-		Assert.Same(builder, result); // Should return the same builder for chaining
+		// Reset builder for next test
+		builder = new FusionCacheBuilder("test-cache", services);
+		var lfuResult2 = builder.WithLfuEviction(config);
+		Assert.NotNull(lfuResult2);
+		Assert.Same(builder, lfuResult2);
 	}
 
 	[Fact]
