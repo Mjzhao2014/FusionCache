@@ -135,39 +135,38 @@ public class EvictionTests
 		};
 		var cache = new FusionCache(options);
 
-		using (cache)
+
+		// Act - Add entries up to threshold
+		for (int i = 0; i < 7; i++)
 		{
-			// Act - Add entries up to threshold
-			for (int i = 0; i < 7; i++)
-			{
-				await cache.SetAsync($"key{i}", $"value{i}");
-			}
-
-			// Verify no eviction happened yet
-			for (int i = 0; i < 7; i++)
-			{
-				var value = await cache.GetOrDefaultAsync<string>($"key{i}");
-				Assert.NotNull(value);
-			}
-
-			// Add 8th entry - should trigger eviction at 80% of 10 = 8 entries
-			await cache.SetAsync("key8", "value8");
-
-			await Task.Delay(50); // Allow eviction to complete
-
-			// Count remaining entries
-			int remainingCount = 0;
-			for (int i = 0; i < 8; i++)
-			{
-				var value = await cache.GetOrDefaultAsync<string>($"key{i}");
-				if (value != null) remainingCount++;
-			}
-
-			// Should have evicted approximately 30% of 8 = ~2-3 entries
-			// So we should have 5-6 entries remaining
-			Assert.True(remainingCount >= 5 && remainingCount <= 6,
-				$"Expected 5-6 remaining entries, but found {remainingCount}");
+			await cache.SetAsync($"key{i}", $"value{i}");
 		}
+
+		// Verify no eviction happened yet
+		for (int i = 0; i < 7; i++)
+		{
+			var value = await cache.GetOrDefaultAsync<string>($"key{i}");
+			Assert.NotNull(value);
+		}
+
+		// Add 8th entry - should trigger eviction at 80% of 10 = 8 entries
+		await cache.SetAsync("key7", "value7");
+
+		await Task.Delay(50); // Allow eviction to complete
+
+		// Count remaining entries
+		int remainingCount = 0;
+		for (int i = 0; i < 8; i++)
+		{
+			var value = await cache.GetOrDefaultAsync<string>($"key{i}");
+			if (value != null) remainingCount++;
+		}
+
+		// Should have evicted approximately 30% of 10 = 3 entries
+		// So we should have 5 entries remaining
+		Assert.True(remainingCount == 5,
+			$"Expected 5 remaining entries, but found {remainingCount}");
+
 	}
 
 	[Fact]
@@ -365,7 +364,7 @@ public class EvictionTests
 		// Arrange
 		var services = new ServiceCollection();
 		var builder = new FusionCacheBuilder("test-cache", services);
-		
+
 		var config = new FusionCacheEvictionPolicyConfig
 		{
 			MaxEntryCount = 500,
@@ -478,9 +477,9 @@ public class EvictionTests
 			await Task.Delay(100); // Allow eviction to complete
 
 			// Assert - Eviction count should respect both min and max constraints
-			Assert.True(evictionEvents.Count >= minBatchSize, 
+			Assert.True(evictionEvents.Count >= minBatchSize,
 				$"Expected at least {minBatchSize} evictions, but got {evictionEvents.Count}");
-			Assert.True(evictionEvents.Count <= maxBatchSize, 
+			Assert.True(evictionEvents.Count <= maxBatchSize,
 				$"Expected at most {maxBatchSize} evictions, but got {evictionEvents.Count}");
 
 			// Verify all evicted entries are valid
