@@ -117,6 +117,15 @@ public class FusionCacheOptions
 	}
 
 	/// <summary>
+	/// Optional memory eviction policy applied to the L1 in-memory cache. If specified,
+	/// the cache will track entry statistics and proactively evict entries according to
+	/// the configured policy when capacity thresholds are exceeded.
+	/// When <see langword="null"/>, no additional eviction policy is applied beyond the
+	/// underlying <see cref="IMemoryCache"/> behavior.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
+
+	/// <summary>
 	/// The name of the cache: it can be used for identification, and in a multi-node scenario it is typically shared between nodes to create a logical association.
 	/// <br/><br/>
 	/// <strong>NOTE:</strong> if you try to set this to a null/whitespace value, that value will be ignored.
