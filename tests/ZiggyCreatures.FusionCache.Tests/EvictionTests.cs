@@ -542,4 +542,338 @@ public class EvictionTests
 		Assert.Throws<ArgumentException>(() =>
 			builder.WithLfuEviction(maxEntryCount: invalidCount));
 	}
+
+	[Fact]
+	public async Task FusionCache_WithMinEvictionBatchSize_EvictsAtLeastMinimumBatchSize()
+	{
+		// Arrange - Configure minimum batch size of 3, even if percentage calculation is smaller
+		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
+		var config = new FusionCacheEvictionPolicyConfig
+		{
+			MaxEntryCount = 10,
+			EvictionPercentage = 0.1, // Would normally evict 1 (10% of 10), but min batch size should override
+			MinEvictionBatchSize = 3,
+			MaxEvictionBatchSize = 100
+		};
+
+		var options = new FusionCacheOptions
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
+			EvictionPolicy = new LruEvictionPolicy(config)
+		};
+		var cache = new FusionCache(options);
+
+		cache.Events.Memory.Eviction += (sender, args) =>
+		{
+			evictionEvents.Add(args);
+		};
+
+		using (cache)
+		{
+			// Act - Fill cache to capacity and trigger eviction
+			for (int i = 0; i < 10; i++)
+			{
+				await cache.SetAsync($"key{i}", $"value{i}");
+			}
+
+			// This should trigger eviction
+			await cache.SetAsync("trigger", "triggerValue");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - Should evict at least MinEvictionBatchSize entries (3), not just 1 from percentage
+			Assert.True(evictionEvents.Count >= 3, 
+				$"Expected at least 3 evictions due to MinEvictionBatchSize, but got {evictionEvents.Count}");
+			
+			// Verify all evicted entries are valid
+			Assert.All(evictionEvents, e =>
+			{
+				Assert.NotNull(e.Key);
+				Assert.NotNull(e.Value);
+				Assert.Equal(EvictionReason.Capacity, e.Reason);
+			});
+		}
+	}
+
+	[Fact]
+	public async Task FusionCache_WithMaxEvictionBatchSize_DoesNotExceedMaximumBatchSize()
+	{
+		// Arrange - Configure small max batch size to limit eviction
+		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
+		var config = new FusionCacheEvictionPolicyConfig
+		{
+			MaxEntryCount = 20,
+			EvictionPercentage = 0.5, // Would normally evict 10 (50% of 20), but max batch size should limit
+			MinEvictionBatchSize = 1,
+			MaxEvictionBatchSize = 5 // Should limit eviction to max 5 entries
+		};
+
+		var options = new FusionCacheOptions
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
+			EvictionPolicy = new LruEvictionPolicy(config)
+		};
+		var cache = new FusionCache(options);
+
+		cache.Events.Memory.Eviction += (sender, args) =>
+		{
+			evictionEvents.Add(args);
+		};
+
+		using (cache)
+		{
+			// Act - Fill cache to capacity
+			for (int i = 0; i < 20; i++)
+			{
+				await cache.SetAsync($"key{i}", $"value{i}");
+			}
+
+			// Trigger eviction
+			await cache.SetAsync("trigger", "triggerValue");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - Should not evict more than MaxEvictionBatchSize entries (5)
+			Assert.True(evictionEvents.Count <= 5, 
+				$"Expected at most 5 evictions due to MaxEvictionBatchSize, but got {evictionEvents.Count}");
+			
+			// Should evict at least 1 entry though
+			Assert.True(evictionEvents.Count >= 1, 
+				$"Expected at least 1 eviction, but got {evictionEvents.Count}");
+
+			// Verify all evicted entries are valid
+			Assert.All(evictionEvents, e =>
+			{
+				Assert.NotNull(e.Key);
+				Assert.NotNull(e.Value);
+				Assert.Equal(EvictionReason.Capacity, e.Reason);
+			});
+		}
+	}
+
+	[Fact]
+	public async Task FusionCache_WithBatchSizeConstraints_RespectsMinAndMaxLimits()
+	{
+		// Arrange - Test scenario where min and max batch sizes create a valid range
+		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
+		var config = new FusionCacheEvictionPolicyConfig
+		{
+			MaxEntryCount = 15,
+			EvictionPercentage = 0.4, // 40% of 15 = 6 entries
+			MinEvictionBatchSize = 4, // Should evict at least 4
+			MaxEvictionBatchSize = 8  // Should evict at most 8
+		};
+
+		var options = new FusionCacheOptions
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
+			EvictionPolicy = new LruEvictionPolicy(config)
+		};
+		var cache = new FusionCache(options);
+
+		cache.Events.Memory.Eviction += (sender, args) =>
+		{
+			evictionEvents.Add(args);
+		};
+
+		using (cache)
+		{
+			// Act - Fill cache to capacity
+			for (int i = 0; i < 15; i++)
+			{
+				await cache.SetAsync($"key{i}", $"value{i}");
+			}
+
+			// Trigger eviction
+			await cache.SetAsync("trigger", "triggerValue");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - Should evict between MinEvictionBatchSize and MaxEvictionBatchSize
+			Assert.True(evictionEvents.Count >= 4, 
+				$"Expected at least 4 evictions due to MinEvictionBatchSize, but got {evictionEvents.Count}");
+			Assert.True(evictionEvents.Count <= 8, 
+				$"Expected at most 8 evictions due to MaxEvictionBatchSize, but got {evictionEvents.Count}");
+
+			// The calculated target (40% of 15 = 6) should be within our constraints [4, 8]
+			// So we should get around 6 evictions
+			Assert.True(evictionEvents.Count >= 4 && evictionEvents.Count <= 8,
+				$"Expected evictions to be between 4 and 8, but got {evictionEvents.Count}");
+		}
+	}
+
+	[Fact]
+	public async Task FusionCache_WithLfuEviction_RespectsMinEvictionBatchSize()
+	{
+		// Arrange - Test MinEvictionBatchSize with LFU policy
+		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
+		var config = new FusionCacheEvictionPolicyConfig
+		{
+			MaxEntryCount = 8,
+			EvictionPercentage = 0.1, // Would normally evict 1 (12.5% of 8 rounded), but min should override
+			MinEvictionBatchSize = 3,
+			MaxEvictionBatchSize = 100
+		};
+
+		var options = new FusionCacheOptions
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
+			EvictionPolicy = new LfuEvictionPolicy(config)
+		};
+		var cache = new FusionCache(options);
+
+		cache.Events.Memory.Eviction += (sender, args) =>
+		{
+			evictionEvents.Add(args);
+		};
+
+		using (cache)
+		{
+			// Act - Fill cache to capacity with different access patterns
+			for (int i = 0; i < 8; i++)
+			{
+				await cache.SetAsync($"key{i}", $"value{i}");
+				// Give some entries more access frequency
+				if (i >= 5)
+				{
+					for (int j = 0; j < 3; j++)
+					{
+						await cache.GetOrDefaultAsync<string>($"key{i}");
+					}
+				}
+			}
+
+			// Trigger eviction
+			await cache.SetAsync("trigger", "triggerValue");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - Should evict at least MinEvictionBatchSize entries (3)
+			Assert.True(evictionEvents.Count >= 3, 
+				$"Expected at least 3 evictions due to MinEvictionBatchSize with LFU, but got {evictionEvents.Count}");
+			
+			// Verify all evicted entries are valid
+			Assert.All(evictionEvents, e =>
+			{
+				Assert.NotNull(e.Key);
+				Assert.NotNull(e.Value);
+				Assert.Equal(EvictionReason.Capacity, e.Reason);
+			});
+		}
+	}
+
+	[Fact]
+	public async Task FusionCache_WithLfuEviction_RespectsMaxEvictionBatchSize()
+	{
+		// Arrange - Test MaxEvictionBatchSize with LFU policy
+		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
+		var config = new FusionCacheEvictionPolicyConfig
+		{
+			MaxEntryCount = 12,
+			EvictionPercentage = 0.6, // Would normally evict 7-8 entries, but max should limit
+			MinEvictionBatchSize = 1,
+			MaxEvictionBatchSize = 4 // Should limit eviction to max 4 entries
+		};
+
+		var options = new FusionCacheOptions
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
+			EvictionPolicy = new LfuEvictionPolicy(config)
+		};
+		var cache = new FusionCache(options);
+
+		cache.Events.Memory.Eviction += (sender, args) =>
+		{
+			evictionEvents.Add(args);
+		};
+
+		using (cache)
+		{
+			// Act - Fill cache to capacity with different access patterns
+			for (int i = 0; i < 12; i++)
+			{
+				await cache.SetAsync($"key{i}", $"value{i}");
+				// Give later entries more access frequency
+				if (i >= 8)
+				{
+					for (int j = 0; j < 5; j++)
+					{
+						await cache.GetOrDefaultAsync<string>($"key{i}");
+					}
+				}
+			}
+
+			// Trigger eviction
+			await cache.SetAsync("trigger", "triggerValue");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - Should not evict more than MaxEvictionBatchSize entries (4)
+			Assert.True(evictionEvents.Count <= 4, 
+				$"Expected at most 4 evictions due to MaxEvictionBatchSize with LFU, but got {evictionEvents.Count}");
+			
+			// Should evict at least 1 entry though
+			Assert.True(evictionEvents.Count >= 1, 
+				$"Expected at least 1 eviction with LFU, but got {evictionEvents.Count}");
+
+			// Verify all evicted entries are valid
+			Assert.All(evictionEvents, e =>
+			{
+				Assert.NotNull(e.Key);
+				Assert.NotNull(e.Value);
+				Assert.Equal(EvictionReason.Capacity, e.Reason);
+			});
+		}
+	}
+
+	[Theory]
+	[InlineData(2, 5, 0.3)] // Min=2, Max=5, 30% eviction
+	[InlineData(1, 10, 0.2)] // Min=1, Max=10, 20% eviction
+	[InlineData(3, 3, 0.5)]  // Min=Max=3, 50% eviction (should evict exactly 3)
+	public async Task FusionCache_EvictionBatchSize_ParameterizedTest(int minBatchSize, int maxBatchSize, double evictionPercentage)
+	{
+		// Arrange
+		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
+		var config = new FusionCacheEvictionPolicyConfig
+		{
+			MaxEntryCount = 20,
+			EvictionPercentage = evictionPercentage,
+			MinEvictionBatchSize = minBatchSize,
+			MaxEvictionBatchSize = maxBatchSize
+		};
+
+		var options = new FusionCacheOptions
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
+			EvictionPolicy = new LruEvictionPolicy(config)
+		};
+		var cache = new FusionCache(options);
+
+		cache.Events.Memory.Eviction += (sender, args) =>
+		{
+			evictionEvents.Add(args);
+		};
+
+		using (cache)
+		{
+			// Act - Fill cache to capacity
+			for (int i = 0; i < 20; i++)
+			{
+				await cache.SetAsync($"key{i}", $"value{i}");
+			}
+
+			// Trigger eviction
+			await cache.SetAsync("trigger", "triggerValue");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - Eviction count should respect both min and max constraints
+			Assert.True(evictionEvents.Count >= minBatchSize, 
+				$"Expected at least {minBatchSize} evictions, but got {evictionEvents.Count}");
+			Assert.True(evictionEvents.Count <= maxBatchSize, 
+				$"Expected at most {maxBatchSize} evictions, but got {evictionEvents.Count}");
+
+			// Verify all evicted entries are valid
+			Assert.All(evictionEvents, e =>
+			{
+				Assert.NotNull(e.Key);
+				Assert.NotNull(e.Value);
+				Assert.Equal(EvictionReason.Capacity, e.Reason);
+			});
+		}
+	}
 }
