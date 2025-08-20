@@ -967,13 +967,15 @@ public sealed class FusionCacheEntryOptions
 		// EVENTS
 		if (events.HasEvictionSubscribers())
 		{
-			res.RegisterPostEvictionCallback(
-				(key, entry, reason, state) =>
-				{
-					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, ((IFusionCacheMemoryEntry?)entry)?.Value);
-				},
-				events
-			);
+				res.RegisterPostEvictionCallback(
+					(key, entry, reason, state) =>
+					{
+						// pass through any current eviction policy name that may be invoking removals
+						var policyName = Internals.Memory.MemoryCacheAccessor.GetCurrentEvictionPolicyName();
+						((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, policyName, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					},
+					events
+				);
 		}
 
 		return (res, null);

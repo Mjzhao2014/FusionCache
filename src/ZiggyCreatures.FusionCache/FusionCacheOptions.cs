@@ -527,6 +527,11 @@ public class FusionCacheOptions
 	/// </summary>
 	public LogLevel MissingCacheKeyPrefixWarningLogLevel { get; set; }
 
+	/// <summary>
+	/// Optional eviction policy to apply to the in-memory cache layer. When set, after each Set operation entries will be tracked and, if the configured capacity threshold is reached, this policy will be invoked to select keys to remove.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
+
 	FusionCacheOptions IOptions<FusionCacheOptions>.Value
 	{
 		get { return this; }
@@ -597,6 +602,8 @@ public class FusionCacheOptions
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+
+			EvictionPolicy = EvictionPolicy,
 		};
 
 		return res;

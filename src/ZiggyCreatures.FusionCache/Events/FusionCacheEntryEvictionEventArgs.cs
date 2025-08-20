@@ -14,10 +14,11 @@ public class FusionCacheEntryEvictionEventArgs
 	/// <param name="key">The cache key related to the event.</param>
 	/// <param name="reason">The reason for the eviction.</param>
 	/// <param name="value">The value being evicted from the cache.</param>
-	public FusionCacheEntryEvictionEventArgs(string key, EvictionReason reason, object? value)
+	public FusionCacheEntryEvictionEventArgs(string key, EvictionReason reason, string? policyName, object? value)
 		: base(key)
 	{
 		Reason = reason;
+		PolicyName = policyName;
 		Value = value;
 	}
 
@@ -30,4 +31,8 @@ public class FusionCacheEntryEvictionEventArgs
 	/// The value being evicted from the cache.
 	/// </summary>
 	public object? Value { get; }
+	/// <summary>
+	/// The name of the eviction policy that caused this eviction, if any.
+	/// </summary>
+	public string? PolicyName { get; }
 }

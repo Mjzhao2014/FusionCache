@@ -10,6 +10,11 @@ namespace ZiggyCreatures.Caching.Fusion.Internals.Memory;
 internal sealed class MemoryCacheAccessor
 	: IDisposable
 {
+	// used to pass along which eviction policy, if any, is triggering removals
+	[ThreadStatic]
+	private static string? _currentEvictionPolicyName;
+	internal static string? GetCurrentEvictionPolicyName() => _currentEvictionPolicyName;
+	internal static void SetCurrentEvictionPolicyName(string? policyName) => _currentEvictionPolicyName = policyName;
 	public MemoryCacheAccessor(IMemoryCache? memoryCache, FusionCacheOptions options, ILogger? logger, FusionCacheMemoryEventsHub events)
 	{
 		if (memoryCache is not null)
@@ -80,6 +85,17 @@ internal sealed class MemoryCacheAccessor
 			{
 				throw new InvalidOperationException("No MemoryCacheEntryOptions or AbsoluteExpiration was determined: this should not be possible, WTH!?");
 			}
+			// update eviction policy and perform any necessary evictions
+			if (_options.EvictionPolicy is not null)
+			{
+				_options.EvictionPolicy.OnSet(key, entry.Metadata);
+				var toEvict = _options.EvictionPolicy.GetKeysToEvict();
+				foreach (var evictKey in toEvict)
+				{
+					// remove with policy name so eviction event includes it
+					RemoveEntry(operationId, evictKey, _options.EvictionPolicy.Name);
+				}
+			}
 
 			// EVENT
 			_events.OnSet(operationId, key);
@@ -103,6 +119,11 @@ internal sealed class MemoryCacheAccessor
 		try
 		{
 			var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
+			// update eviction policy on successful hit
+			if (entry is not null)
+			{
+				_options.EvictionPolicy?.OnGet(key);
+			}
 
 			// EVENT
 			if (entry is not null)
@@ -140,7 +161,7 @@ internal sealed class MemoryCacheAccessor
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] trying to get from memory", _options.CacheName, _options.InstanceId, operationId, key);
 
-			if (_cache.TryGetValue<IFusionCacheMemoryEntry>(key, out entry) == false)
+				if (_cache.TryGetValue<IFusionCacheMemoryEntry>(key, out entry) == false)
 			{
 				if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 					_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] memory entry not found", _options.CacheName, _options.InstanceId, operationId, key);
@@ -159,6 +180,11 @@ internal sealed class MemoryCacheAccessor
 
 					isValid = true;
 				}
+			}
+			// update eviction policy on successful hit
+			if (entry is not null)
+			{
+				_options.EvictionPolicy?.OnGet(key);
 			}
 
 			// EVENT
@@ -181,26 +207,32 @@ internal sealed class MemoryCacheAccessor
 		}
 	}
 
-	public void RemoveEntry(string operationId, string key)
+	public void RemoveEntry(string operationId, string key, string? evictionPolicyName = null)
 	{
 		// ACTIVITY
 		using var activity = Activities.SourceMemoryLevel.StartActivityWithCommonTags(Activities.Names.MemoryRemove, _options.CacheName, _options.InstanceId!, key, operationId, CacheLevelKind.Memory);
-
 		try
 		{
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
-
+			// set current policy name so eviction callback can include it
+			MemoryCacheAccessor.SetCurrentEvictionPolicyName(evictionPolicyName);
 			_cache.Remove(key);
-
 			// EVENT
 			_events.OnRemove(operationId, key);
+			// update eviction policy tracking
+			_options.EvictionPolicy?.OnRemove(key);
 		}
 		catch (Exception exc)
 		{
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			activity?.AddException(exc);
 			throw;
+		}
+		finally
+		{
+			// clear thread static to avoid leaking policy to unrelated evictions
+			MemoryCacheAccessor.SetCurrentEvictionPolicyName(null);
 		}
 	}
 
