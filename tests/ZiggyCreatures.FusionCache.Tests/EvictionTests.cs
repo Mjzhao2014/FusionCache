@@ -288,6 +288,7 @@ public class EvictionTests
 		Assert.Equal("second", evictionEvent.Key);
 		Assert.Equal("value2", evictionEvent.Value);
 		Assert.Equal(EvictionReason.Capacity, evictionEvent.Reason);
+		Assert.Equal("LruEvictionPolicy", evictionEvent.PolicyName);
 
 	}
 
