@@ -11,7 +11,7 @@
   - LFU (Least Frequently Used) - Evicts entries with lowest access frequency
 
 Configuration options:
-- Capacity Limits: Support both entry count and total size limits
+- Capacity Limits: Support entry count limits
  - Thresholds: Configurable trigger points (e.g., evict at 80% capacity)
  - Eviction Amount: Configurable percentage/count of entries to remove
  - Constraints: Min/max limits on eviction batch sizes
@@ -23,7 +23,6 @@ Configuration options:
   public class FusionCacheEvictionPolicyConfig
   {
       public int? MaxEntryCount { get; set; }           // Max entries before eviction
-      public long? MaxTotalSize { get; set; }           // Max total size in bytes
       public double EvictionThreshold { get; set; } = 1.0;  // Trigger at % capacity (0.0-1.0)
       public double EvictionPercentage { get; set; } = 0.1; // % to evict when triggered
       public int MinEvictionBatchSize { get; set; } = 1;        // Minimum entries to evict
