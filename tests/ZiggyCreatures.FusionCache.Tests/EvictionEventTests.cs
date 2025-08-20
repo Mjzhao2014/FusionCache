@@ -7,51 +7,6 @@ namespace ZiggyCreatures.Caching.Fusion.Tests;
 
 public class EvictionEventTests
 {
-	[Fact]
-	public async Task FusionCache_EvictionPolicy_FiresEvictionEvents()
-	{
-		// Arrange
-		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
-		var options = new FusionCacheOptions
-		{
-			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
-			EvictionPolicy = new LruEvictionPolicy(new FusionCacheEvictionPolicyConfig
-			{
-				MaxEntryCount = 3,
-				EvictionPercentage = 0.5
-			})
-		};
-
-		var cache = new FusionCache(options);
-
-		// Subscribe to eviction events
-		cache.Events.Memory.Eviction += (sender, args) =>
-		{
-			evictionEvents.Add(args);
-		};
-
-		using (cache)
-		{
-			// Act - Fill cache beyond capacity
-			await cache.SetAsync("key1", "value1");
-			await cache.SetAsync("key2", "value2");
-			await cache.SetAsync("key3", "value3");
-			
-			// This should trigger eviction
-			await cache.SetAsync("key4", "value4");
-
-			// Allow some time for async eviction processing
-			await Task.Delay(50);
-
-			// Assert
-			Assert.NotEmpty(evictionEvents);
-			Assert.True(evictionEvents.Count >= 1, $"Expected at least 1 eviction event, got {evictionEvents.Count}");
-			
-			var evictionEvent = evictionEvents[0];
-			Assert.NotNull(evictionEvent.Key);
-			Assert.Contains(evictionEvent.Key, new[] { "key1", "key2", "key3" }); // One of the first 3 should be evicted
-		}
-	}
 
 	[Fact]
 	public async Task FusionCache_LruEvictionPolicy_FiresEventsWithCorrectValues()
@@ -64,7 +19,6 @@ public class EvictionEventTests
 			EvictionPolicy = new LruEvictionPolicy(new FusionCacheEvictionPolicyConfig
 			{
 				MaxEntryCount = 2,
-				EvictionPercentage = 0.5
 			})
 		};
 
@@ -76,26 +30,26 @@ public class EvictionEventTests
 			evictionEvents.Add(args);
 		};
 
-		using (cache)
-		{
-			// Act
-			await cache.SetAsync("first", "value1");
-			await cache.SetAsync("second", "value2");
-			
-			// Access first to make it more recently used
-			await cache.GetOrDefaultAsync<string>("first");
-			
-			// Add third entry - should evict "second" (least recently used)
-			await cache.SetAsync("third", "value3");
 
-			await Task.Delay(50);
+		// Act
+		await cache.SetAsync("first", "value1");
+		await cache.SetAsync("second", "value2");
 
-			// Assert
-			Assert.Single(evictionEvents);
-			var evictionEvent = evictionEvents[0];
-			Assert.Equal("second", evictionEvent.Key);
-			Assert.Equal("value2", evictionEvent.Value);
-		}
+		// Access first to make it more recently used
+		await cache.GetOrDefaultAsync<string>("first");
+
+		// Add third entry - should evict "second" (least recently used)
+		await cache.SetAsync("third", "value3");
+
+		await Task.Delay(50);
+
+		// Assert
+		Assert.Single(evictionEvents);
+		var evictionEvent = evictionEvents[0];
+		Assert.Equal("second", evictionEvent.Key);
+		Assert.Equal("value2", evictionEvent.Value);
+		Assert.Equal(EvictionReason.Capacity, evictionEvent.Reason);
+
 	}
 
 	[Fact]
@@ -121,71 +75,28 @@ public class EvictionEventTests
 			evictionEvents.Add(args);
 		};
 
-		using (cache)
+
+		// Act - Fill cache to capacity
+		for (int i = 1; i <= 5; i++)
 		{
-			// Act - Fill cache to capacity
-			for (int i = 1; i <= 5; i++)
-			{
-				await cache.SetAsync($"key{i}", $"value{i}");
-			}
-
-			// Trigger eviction by adding another entry
-			await cache.SetAsync("trigger", "trigger-value");
-
-			await Task.Delay(100);
-
-			// Assert
-			Assert.True(evictionEvents.Count >= 2, $"Expected at least 2 eviction events, got {evictionEvents.Count}");
-			
-			// Verify all evicted keys are different
-			var evictedKeys = evictionEvents.Select(e => e.Key).ToList();
-			Assert.Equal(evictedKeys.Count, evictedKeys.Distinct().Count());
-			
-			// Verify all events have values
-			Assert.All(evictionEvents, e => Assert.NotNull(e.Value));
+			await cache.SetAsync($"key{i}", $"value{i}");
 		}
-	}
 
-	[Fact]
-	public async Task FusionCache_EvictionEvents_ContainCorrectEventReason()
-	{
-		// Arrange
-		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
-		var options = new FusionCacheOptions
-		{
-			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
-			EvictionPolicy = new LruEvictionPolicy(new FusionCacheEvictionPolicyConfig
-			{
-				MaxEntryCount = 2,
-				EvictionPercentage = 0.5
-			})
-		};
+		// Trigger eviction by adding another entry
+		await cache.SetAsync("trigger", "trigger-value");
 
-		var cache = new FusionCache(options);
+		await Task.Delay(100);
 
-		// Subscribe to eviction events
-		cache.Events.Memory.Eviction += (sender, args) =>
-		{
-			evictionEvents.Add(args);
-		};
+		// Assert
+		Assert.True(evictionEvents.Count >= 2, $"Expected at least 2 eviction events, got {evictionEvents.Count}");
 
-		using (cache)
-		{
-			// Act
-			await cache.SetAsync("key1", "value1");
-			await cache.SetAsync("key2", "value2");
-			await cache.SetAsync("key3", "value3"); // Should trigger eviction
+		// Verify all evicted keys are different
+		var evictedKeys = evictionEvents.Select(e => e.Key).ToList();
+		Assert.Equal(evictedKeys.Count, evictedKeys.Distinct().Count());
 
-			await Task.Delay(50);
+		// Verify all events have values
+		Assert.All(evictionEvents, e => Assert.NotNull(e.Value));
 
-			// Assert
-			Assert.Single(evictionEvents);
-			var evictionEvent = evictionEvents[0];
-			
-			// Policy evictions should use EvictionReason.Capacity
-			// (based on the current implementation in OnEviction with policy)
-			Assert.Equal(EvictionReason.Capacity, evictionEvent.Reason);
-		}
 	}
 
 	[Fact]
@@ -207,21 +118,20 @@ public class EvictionEventTests
 			evictionEvents.Add(args);
 		};
 
-		using (cache)
+
+		// Act - Add many entries
+		for (int i = 0; i < 100; i++)
 		{
-			// Act - Add many entries
-			for (int i = 0; i < 100; i++)
-			{
-				await cache.SetAsync($"key{i}", $"value{i}");
-			}
-
-			await Task.Delay(100);
-
-			// Assert - No policy eviction events should be fired
-			// (though underlying IMemoryCache might still evict and fire events)
-			var policyEvictions = evictionEvents.Where(e => e.Reason == EvictionReason.Capacity).ToList();
-			Assert.Empty(policyEvictions);
+			await cache.SetAsync($"key{i}", $"value{i}");
 		}
+
+		await Task.Delay(100);
+
+		// Assert - No policy eviction events should be fired
+		// (though underlying IMemoryCache might still evict and fire events)
+		var policyEvictions = evictionEvents.Where(e => e.Reason == EvictionReason.Capacity).ToList();
+		Assert.Empty(policyEvictions);
+
 	}
 
 	[Fact]
@@ -230,7 +140,7 @@ public class EvictionEventTests
 		// Arrange
 		var evictionEvents = new List<FusionCacheEntryEvictionEventArgs>();
 		var evictionEventsLock = new object();
-		
+
 		var options = new FusionCacheOptions
 		{
 			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
@@ -252,39 +162,37 @@ public class EvictionEventTests
 			}
 		};
 
-		using (cache)
+
+		// Act - Rapidly add entries from multiple threads
+		var tasks = new List<Task>();
+		for (int i = 0; i < 50; i++)
 		{
-			// Act - Rapidly add entries from multiple threads
-			var tasks = new List<Task>();
-			for (int i = 0; i < 50; i++)
+			int index = i;
+			tasks.Add(Task.Run(async () =>
 			{
-				int index = i;
-				tasks.Add(Task.Run(async () =>
-				{
-					await cache.SetAsync($"key{index}", $"value{index}");
-					await cache.GetOrDefaultAsync<string>($"key{index}");
-				}));
-			}
+				await cache.SetAsync($"key{index}", $"value{index}");
+				await cache.GetOrDefaultAsync<string>($"key{index}");
+			}));
+		}
 
-			await Task.WhenAll(tasks);
-			await Task.Delay(200); // Allow eviction events to complete
+		await Task.WhenAll(tasks);
+		await Task.Delay(200); // Allow eviction events to complete
 
-			// Assert
-			lock (evictionEventsLock)
+		// Assert
+		lock (evictionEventsLock)
+		{
+			Assert.NotEmpty(evictionEvents);
+
+			// Verify no duplicate keys in eviction events
+			var evictedKeys = evictionEvents.Select(e => e.Key).ToList();
+			Assert.Equal(evictedKeys.Count, evictedKeys.Distinct().Count());
+
+			// Verify all events have valid data
+			Assert.All(evictionEvents, e =>
 			{
-				Assert.NotEmpty(evictionEvents);
-				
-				// Verify no duplicate keys in eviction events
-				var evictedKeys = evictionEvents.Select(e => e.Key).ToList();
-				Assert.Equal(evictedKeys.Count, evictedKeys.Distinct().Count());
-				
-				// Verify all events have valid data
-				Assert.All(evictionEvents, e =>
-				{
-					Assert.NotNull(e.Key);
-					Assert.NotNull(e.Value);
-				});
-			}
+				Assert.NotNull(e.Key);
+				Assert.NotNull(e.Value);
+			});
 		}
 	}
 }
