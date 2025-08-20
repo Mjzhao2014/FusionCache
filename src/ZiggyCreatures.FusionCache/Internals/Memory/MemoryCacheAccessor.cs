@@ -31,6 +31,23 @@ internal sealed class MemoryCacheAccessor
 		_events = events;
 	}
 
+	private void EvictIfNeeded(string operationId)
+	{
+		// if no policy configured, nothing to do
+		var policy = _options.EvictionPolicy;
+		if (policy is null)
+			return;
+		// determine keys to evict (if any)
+		var toEvict = policy.GetKeysToEvict();
+		foreach (var k in toEvict)
+		{
+			// retrieve entry before remove to pass value to event
+			var entry = _cache.Get<IFusionCacheMemoryEntry>(k);
+			RemoveEntry(operationId, k);
+			_events.OnPolicyEviction(operationId, k, policy.Name, entry?.Value);
+		}
+	}
+
 	private IMemoryCache _cache;
 	private readonly bool _cacheIsOwned;
 	private readonly bool _cacheCanClear;
@@ -83,6 +100,13 @@ internal sealed class MemoryCacheAccessor
 
 			// EVENT
 			_events.OnSet(operationId, key);
+
+			// POLICY TRACKING
+			if (_options.EvictionPolicy is not null)
+			{
+				_options.EvictionPolicy.OnSet(key, entry.Metadata);
+				EvictIfNeeded(operationId);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -105,14 +129,19 @@ internal sealed class MemoryCacheAccessor
 			var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
 
 			// EVENT
-			if (entry is not null)
-			{
-				_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
-			}
-			else
-			{
-				_events.OnMiss(operationId, key, activity);
-			}
+				if (entry is not null)
+				{
+					_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
+					// POLICY
+					if (_options.EvictionPolicy is not null)
+					{
+						_options.EvictionPolicy.OnGet(key);
+					}
+				}
+				else
+				{
+					_events.OnMiss(operationId, key, activity);
+				}
 
 			return entry;
 		}
@@ -161,15 +190,19 @@ internal sealed class MemoryCacheAccessor
 				}
 			}
 
-			// EVENT
-			if (entry is not null)
-			{
-				_events.OnHit(operationId, key, isValid == false, activity);
-			}
-			else
-			{
-				_events.OnMiss(operationId, key, activity);
-			}
+				// EVENT
+				if (entry is not null)
+				{
+					_events.OnHit(operationId, key, isValid == false, activity);
+					if (_options.EvictionPolicy is not null)
+					{
+						_options.EvictionPolicy.OnGet(key);
+					}
+				}
+				else
+				{
+					_events.OnMiss(operationId, key, activity);
+				}
 
 			return (entry, isValid);
 		}
@@ -191,10 +224,15 @@ internal sealed class MemoryCacheAccessor
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
+			// take snapshot of entry before removal to update policy if needed
+			var entry = _cache.Get<IFusionCacheMemoryEntry>(key);
 			_cache.Remove(key);
 
-			// EVENT
 			_events.OnRemove(operationId, key);
+			if (_options.EvictionPolicy is not null)
+			{
+				_options.EvictionPolicy.OnRemove(key);
+			}
 		}
 		catch (Exception exc)
 		{

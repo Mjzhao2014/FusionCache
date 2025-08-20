@@ -20,6 +20,7 @@ internal static class Tags
 
 
 		public const string MemoryEvictReason = "fusioncache.memory.evict_reason";
+		public const string MemoryEvictPolicy = "fusioncache.memory.evict_policy";
 
 		public const string DistributedCircuitBreakerClosed = "fusioncache.distributed.circuit_breaker.closed";
 

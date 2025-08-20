@@ -257,6 +257,13 @@ public class FusionCacheOptions
 	public bool SkipAutoCloneForImmutableObjects { get; set; }
 
 	/// <summary>
+	/// Optional in-memory eviction policy that will be invoked after memory set operations to proactively
+	/// remove entries when configured capacity thresholds are reached. If <c>null</c>, no policy-based eviction
+	/// will be applied and the cache will rely solely on the underlying <see cref="IMemoryCache"/> behavior.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
+
+	/// <summary>
 	/// DEPRECATED: please use EnableAutoRecovery.
 	/// <br/><br/>
 	/// Enable auto-recovery for the backplane notifications to better handle transient errors without generating synchronization issues: notifications that failed to be sent out will be retried later on, when the backplane becomes responsive again.
@@ -574,6 +581,8 @@ public class FusionCacheOptions
 			IncludeTagsInMetrics = IncludeTagsInMetrics,
 
 			DisableTagging = DisableTagging,
+
+			EvictionPolicy = EvictionPolicy,
 
 			SkipAutoCloneForImmutableObjects = SkipAutoCloneForImmutableObjects,
 
