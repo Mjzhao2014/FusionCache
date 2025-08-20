@@ -24,7 +24,8 @@ public sealed class FusionCacheMemoryEventsHub
 	}
 
 	/// <summary>
-	/// The event for a cache eviction.
+	/// The event fired when an entry is removed from the in-memory cache.
+	/// This can be triggered by the inner <see cref="IMemoryCache"/> as entries expire, or by a configured eviction policy when capacity is exceeded.
 	/// </summary>
 	public event EventHandler<FusionCacheEntryEvictionEventArgs>? Eviction;
 
@@ -42,12 +43,12 @@ public sealed class FusionCacheMemoryEventsHub
 		return Eviction is not null;
 	}
 
-	internal void OnEviction(string operationId, string key, EvictionReason reason, object? value)
+	internal void OnEviction(string operationId, string key, EvictionReason reason, string? policyName, object? value)
 	{
 		// METRIC
 		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()));
 
-		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, policyName, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
 	}
 
 	internal void OnExpire(string operationId, string key)

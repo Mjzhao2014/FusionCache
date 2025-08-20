@@ -938,7 +938,7 @@ public sealed class FusionCacheEntryOptions
 		return new DateTimeOffset(FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(physicalDuration, this, true), TimeSpan.Zero);
 	}
 
-	internal (MemoryCacheEntryOptions? memoryEntryOptions, DateTimeOffset? absoluteExpiration) ToMemoryCacheEntryOptionsOrAbsoluteExpiration(FusionCacheMemoryEventsHub events, FusionCacheOptions options, ILogger? logger, string operationId, string key, long? size, byte? priority)
+	internal (MemoryCacheEntryOptions? memoryEntryOptions, DateTimeOffset? absoluteExpiration) ToMemoryCacheEntryOptionsOrAbsoluteExpiration(FusionCacheMemoryEventsHub events, FusionCacheOptions options, ILogger? logger, string operationId, string key, long? size, byte? priority, IFusionCacheEvictionPolicy? evictionPolicy = null)
 	{
 		size ??= Size;
 		priority ??= (byte)Priority;
@@ -952,7 +952,8 @@ public sealed class FusionCacheEntryOptions
 				logger.Log(options.IncoherentOptionsNormalizationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): FailSafeMaxDuration {FailSafeMaxDuration} was lower than the Duration {Duration} on {Options}. Duration has been used instead.", options.CacheName, options.InstanceId, operationId, key, FailSafeMaxDuration.ToLogString(), Duration.ToLogString(), this.ToLogString());
 		}
 
-		if (size is null && priority.GetValueOrDefault(FusionCacheInternalUtils.CacheItemPriority_DefaultValue) == FusionCacheInternalUtils.CacheItemPriority_DefaultValue && events.HasEvictionSubscribers() == false)
+		var hasEvents = events.HasEvictionSubscribers();
+		if (size is null && priority.GetValueOrDefault(FusionCacheInternalUtils.CacheItemPriority_DefaultValue) == FusionCacheInternalUtils.CacheItemPriority_DefaultValue && hasEvents == false && evictionPolicy is null)
 		{
 			return (null, absoluteExpiration);
 		}
@@ -965,14 +966,25 @@ public sealed class FusionCacheEntryOptions
 		};
 
 		// EVENTS
-		if (events.HasEvictionSubscribers())
+		if (hasEvents)
 		{
 			res.RegisterPostEvictionCallback(
 				(key, entry, reason, state) =>
 				{
-					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, null, ((IFusionCacheMemoryEntry?)entry)?.Value);
 				},
-				events
+			events
+			);
+		}
+		// POLICY STATE
+		if (evictionPolicy is not null)
+		{
+			res.RegisterPostEvictionCallback(
+				(key, entry, reason, state) =>
+				{
+					((IFusionCacheEvictionPolicy?)state)?.OnRemove(key.ToString() ?? "");
+				},
+			evictionPolicy
 			);
 		}
 

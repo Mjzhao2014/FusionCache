@@ -393,6 +393,14 @@ public class FusionCacheOptions
 	public bool PreferSyncSerialization { get; set; }
 
 	/// <summary>
+	/// Optional eviction policy for the in-memory L1 cache. When set, FusionCache will track cache
+	/// operations and evict entries according to the policy when configured capacity limits are reached.
+	/// When <see langword="null"/> (the default) no eviction by entry count is performed by FusionCache,
+	/// and the underlying <see cref="IMemoryCache"/> heuristic will control eviction.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
+
+	/// <summary>
 	/// Include tags when logging a cache entry: since tags may contain sensitive data, be careful about enabling this.
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Logging.md"/>
@@ -568,6 +576,7 @@ public class FusionCacheOptions
 			ReThrowOriginalExceptions = ReThrowOriginalExceptions,
 
 			PreferSyncSerialization = PreferSyncSerialization,
+			EvictionPolicy = EvictionPolicy,
 
 			IncludeTagsInLogs = IncludeTagsInLogs,
 			IncludeTagsInTraces = IncludeTagsInTraces,
