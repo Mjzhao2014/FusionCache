@@ -182,9 +182,9 @@ public class EvictionEventTests
 			Assert.Single(evictionEvents);
 			var evictionEvent = evictionEvents[0];
 			
-			// Policy evictions should use EvictionReason.None with policy name in metrics
-			// (based on the current implementation in OnPolicyEviction)
-			Assert.Equal(EvictionReason.None, evictionEvent.Reason);
+			// Policy evictions should use EvictionReason.Capacity
+			// (based on the current implementation in OnEviction with policy)
+			Assert.Equal(EvictionReason.Capacity, evictionEvent.Reason);
 		}
 	}
 
@@ -219,7 +219,7 @@ public class EvictionEventTests
 
 			// Assert - No policy eviction events should be fired
 			// (though underlying IMemoryCache might still evict and fire events)
-			var policyEvictions = evictionEvents.Where(e => e.Reason == EvictionReason.None).ToList();
+			var policyEvictions = evictionEvents.Where(e => e.Reason == EvictionReason.Capacity).ToList();
 			Assert.Empty(policyEvictions);
 		}
 	}

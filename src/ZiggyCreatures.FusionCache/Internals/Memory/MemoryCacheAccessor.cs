@@ -44,7 +44,7 @@ internal sealed class MemoryCacheAccessor
 			// retrieve entry before remove to pass value to event
 			var entry = _cache.Get<IFusionCacheMemoryEntry>(k);
 			RemoveEntry(operationId, k);
-			_events.OnPolicyEviction(operationId, k, policy.Name, entry?.Value);
+			_events.OnEviction(operationId, k, EvictionReason.Capacity, policy.Name, entry?.Value);
 		}
 	}
 

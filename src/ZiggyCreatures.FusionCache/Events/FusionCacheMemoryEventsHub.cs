@@ -42,23 +42,25 @@ public sealed class FusionCacheMemoryEventsHub
 		return Eviction is not null;
 	}
 
-	internal void OnEviction(string operationId, string key, EvictionReason reason, object? value)
+	internal void OnEviction(string operationId, string key, EvictionReason reason, string? policyName, object? value)
 	{
 		// METRIC
-		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()));
+		if (policyName is not null)
+		{
+			// Policy eviction with policy name tag
+			Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId,
+				new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()),
+				new KeyValuePair<string, object?>(Tags.Names.MemoryEvictPolicy, policyName));
+		}
+		else
+		{
+			// Regular eviction without policy
+			Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()));
+		}
 
 		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
 	}
 
-	internal void OnPolicyEviction(string operationId, string key, string policyName, object? value)
-	{
-		// METRIC: record eviction tagged with policy name
-		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId,
-			new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, EvictionReason.Capacity.ToString()),
-			new KeyValuePair<string, object?>(Tags.Names.MemoryEvictPolicy, policyName));
-		// Reuse existing eviction event with reason "Capacity"
-		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, EvictionReason.Capacity, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
-	}
 
 	internal void OnExpire(string operationId, string key)
 	{
