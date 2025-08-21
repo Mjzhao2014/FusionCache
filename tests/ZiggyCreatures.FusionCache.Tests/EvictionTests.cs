@@ -445,6 +445,124 @@ public class EvictionTests
 			builder.WithLfuEviction(maxEntryCount: invalidCount));
 	}
 
+	[Fact]
+	public async Task WithLruEviction_FunctionalTest_CreatesWorkingCache()
+	{
+		// Arrange
+		var services = new ServiceCollection();
+		services.AddFusionCache()
+			.WithLruEviction(maxEntryCount: 3, evictionPercentage: 0.1);
+
+		// Act
+		var serviceProvider = services.BuildServiceProvider();
+		var cache = serviceProvider.GetRequiredService<IFusionCache>();
+
+		using (cache)
+		{
+			// Add entries
+			await cache.SetAsync("key1", "value1");
+			await cache.SetAsync("key2", "value2");
+			await cache.SetAsync("key3", "value3");
+
+			// Verify entries exist
+			Assert.Equal("value1", await cache.GetOrDefaultAsync<string>("key1"));
+			Assert.Equal("value2", await cache.GetOrDefaultAsync<string>("key2"));
+			Assert.Equal("value3", await cache.GetOrDefaultAsync<string>("key3"));
+
+			// Access key1 to make it more recently used
+			await cache.GetOrDefaultAsync<string>("key1");
+
+			// Add one more to trigger eviction
+			await cache.SetAsync("key4", "value4");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - key2 or key3 should be evicted (least recently used)
+			var key1Value = await cache.GetOrDefaultAsync<string>("key1");
+			var key4Value = await cache.GetOrDefaultAsync<string>("key4");
+			
+			Assert.Equal("value1", key1Value); // Should still exist (most recently accessed)
+			Assert.Equal("value4", key4Value); // Should exist (just added)
+		}
+	}
+
+	[Fact]
+	public async Task WithLfuEviction_FunctionalTest_CreatesWorkingCache()
+	{
+		// Arrange
+		var services = new ServiceCollection();
+		services.AddFusionCache()
+			.WithLfuEviction(maxEntryCount: 3, evictionPercentage: 0.1);
+
+		// Act
+		var serviceProvider = services.BuildServiceProvider();
+		var cache = serviceProvider.GetRequiredService<IFusionCache>();
+
+		using (cache)
+		{
+			// Add entries
+			await cache.SetAsync("key1", "value1");
+			await cache.SetAsync("key2", "value2");
+			await cache.SetAsync("key3", "value3");
+
+			// Access key1 multiple times to increase frequency
+			await cache.GetOrDefaultAsync<string>("key1");
+			await cache.GetOrDefaultAsync<string>("key1");
+			await cache.GetOrDefaultAsync<string>("key1");
+
+			// Add one more to trigger eviction
+			await cache.SetAsync("key4", "value4");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - key1 should still exist (most frequently used)
+			var key1Value = await cache.GetOrDefaultAsync<string>("key1");
+			var key4Value = await cache.GetOrDefaultAsync<string>("key4");
+			
+			Assert.Equal("value1", key1Value); // Should still exist (most frequently accessed)
+			Assert.Equal("value4", key4Value); // Should exist (just added)
+		}
+	}
+
+	[Fact]
+	public async Task WithLfuEviction_TieBreaker()
+	{
+		// Arrange
+		var services = new ServiceCollection();
+		services.AddFusionCache()
+			.WithLfuEviction(maxEntryCount: 3, evictionPercentage: 0.1);
+
+		// Act
+		var serviceProvider = services.BuildServiceProvider();
+		var cache = serviceProvider.GetRequiredService<IFusionCache>();
+
+		using (cache)
+		{
+			// Add entries
+			await cache.SetAsync("key1", "value1");
+			await cache.SetAsync("key2", "value2");
+			await cache.SetAsync("key3", "value3");
+
+			// Access key1 multiple times to increase frequency
+			await cache.GetOrDefaultAsync<string>("key1");
+			await cache.GetOrDefaultAsync<string>("key1");
+			await cache.GetOrDefaultAsync<string>("key1");
+
+			// Add one more to trigger eviction
+			await cache.SetAsync("key4", "value4");
+			await Task.Delay(100); // Allow eviction to complete
+
+			// Assert - key1 should still exist (most frequently used)
+			var key1Value = await cache.GetOrDefaultAsync<string>("key1");
+			var key2Value = await cache.GetOrDefaultAsync<string>("key2");
+			var key3Value = await cache.GetOrDefaultAsync<string>("key3");
+			var key4Value = await cache.GetOrDefaultAsync<string>("key4");
+			
+			Assert.Equal("value1", key1Value); // Should still exist (most frequently accessed)
+			Assert.Null(key2Value); // Should be evicted (least frequently accessed)
+			Assert.Equal("value3", key3Value); // Should exist (less frequently accessed than key1)
+			Assert.Equal("value4", key4Value); // Should exist (just added)
+		}
+	}
+
 	[Theory]
 	[InlineData(2, 5, 0.3)] // Min=2, Max=5, 30% eviction
 	[InlineData(1, 10, 0.2)] // Min=1, Max=10, 20% eviction
