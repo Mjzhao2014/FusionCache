@@ -970,7 +970,21 @@ public sealed class FusionCacheEntryOptions
 			res.RegisterPostEvictionCallback(
 				(key, entry, reason, state) =>
 				{
-					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					var hub = (FusionCacheMemoryEventsHub?)state;
+					if (hub is null)
+						return;
+					var policyName = ZiggyCreatures.Caching.Fusion.Internals.Memory.MemoryCacheAccessor.CurrentEvictionPolicyName.Value;
+					if (policyName is not null)
+					{
+						// inject capacity reason when evicting due to policy
+						hub.OnEviction(string.Empty, key.ToString() ?? "", Microsoft.Extensions.Caching.Memory.EvictionReason.Capacity, policyName, ((IFusionCacheMemoryEntry?)entry)?.Value);
+						// clear flag
+						ZiggyCreatures.Caching.Fusion.Internals.Memory.MemoryCacheAccessor.CurrentEvictionPolicyName.Value = null;
+					}
+					else
+					{
+						hub.OnEviction(string.Empty, key.ToString() ?? "", reason, null, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					}
 				},
 				events
 			);

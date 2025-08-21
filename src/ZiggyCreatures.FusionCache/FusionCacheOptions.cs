@@ -12,8 +12,8 @@ namespace ZiggyCreatures.Caching.Fusion;
 /// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 /// </summary>
 [DebuggerDisplay($"{{{nameof(GetDebuggerDisplay)}(),nq}}")]
-public class FusionCacheOptions
-	: IOptions<FusionCacheOptions>
+	public class FusionCacheOptions
+		: IOptions<FusionCacheOptions>
 {
 	private string _cacheName;
 	private FusionCacheEntryOptions _defaultEntryOptions;
@@ -218,6 +218,13 @@ public class FusionCacheOptions
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
 	/// </summary>
 	public CacheKeyModifierMode DistributedCacheKeyModifierMode { get; set; }
+
+	/// <summary>
+	/// Optional in-memory eviction policy to apply when using FusionCache as an L1 cache.
+	/// When set, the policy will be notified of memory cache accesses and will trigger eviction
+	/// of entries according to the configured policy when capacity thresholds are reached.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
 
 	/// <summary>
 	/// The duration of the circuit-breaker used when working with the backplane. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
@@ -597,6 +604,7 @@ public class FusionCacheOptions
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+			EvictionPolicy = EvictionPolicy,
 		};
 
 		return res;

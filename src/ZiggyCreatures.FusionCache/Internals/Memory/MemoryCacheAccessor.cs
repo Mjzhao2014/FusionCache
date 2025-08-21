@@ -10,6 +10,11 @@ namespace ZiggyCreatures.Caching.Fusion.Internals.Memory;
 internal sealed class MemoryCacheAccessor
 	: IDisposable
 {
+	// A thread-local used to override the eviction reason when performing
+	// explicit capacity-based evictions. This is inspected inside the
+	// MemoryCache entry PostEviction callback so that we can adjust the
+	// event reason and include a policy name.
+	internal static readonly System.Threading.AsyncLocal<string?> CurrentEvictionPolicyName = new();
 	public MemoryCacheAccessor(IMemoryCache? memoryCache, FusionCacheOptions options, ILogger? logger, FusionCacheMemoryEventsHub events)
 	{
 		if (memoryCache is not null)
@@ -83,6 +88,23 @@ internal sealed class MemoryCacheAccessor
 
 			// EVENT
 			_events.OnSet(operationId, key);
+
+			// EVICTION POLICY
+			if (_options.EvictionPolicy is not null)
+			{
+				// update policy state on set
+				_options.EvictionPolicy.OnSet(key, entry.Metadata);
+				// compute keys to evict if any
+				var toEvict = _options.EvictionPolicy.GetKeysToEvict();
+				if (toEvict is not null)
+				{
+					foreach (var k in toEvict)
+					{
+						EvictEntry(operationId, k, _options.EvictionPolicy.Name);
+						_options.EvictionPolicy.OnRemove(k);
+					}
+				}
+			}
 		}
 		catch (Exception exc)
 		{
@@ -108,6 +130,8 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
+				// update eviction policy usage
+				_options.EvictionPolicy?.OnGet(key);
 			}
 			else
 			{
@@ -165,6 +189,11 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, isValid == false, activity);
+				// update eviction policy usage if valid entry retrieved
+				if (isValid)
+				{
+					_options.EvictionPolicy?.OnGet(key);
+				}
 			}
 			else
 			{
@@ -195,12 +224,38 @@ internal sealed class MemoryCacheAccessor
 
 			// EVENT
 			_events.OnRemove(operationId, key);
+
+			// EVICTION POLICY CLEANUP
+			if (_options.EvictionPolicy is not null)
+			{
+				_options.EvictionPolicy.OnRemove(key);
+			}
 		}
 		catch (Exception exc)
 		{
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			activity?.AddException(exc);
 			throw;
+		}
+	}
+
+	/// <summary>
+	/// Removes an entry from the underlying MemoryCache as part of an eviction policy-driven eviction.
+	/// The current eviction policy name is stored thread-locally so the PostEviction callback can
+	/// override the eviction reason and include the policy name.
+	/// </summary>
+	internal void EvictEntry(string operationId, string key, string policyName)
+	{
+		// mark current eviction policy for callback
+		CurrentEvictionPolicyName.Value = policyName;
+		try
+		{
+			_cache.Remove(key);
+		}
+		finally
+		{
+			// reset override
+			CurrentEvictionPolicyName.Value = null;
 		}
 	}
 
