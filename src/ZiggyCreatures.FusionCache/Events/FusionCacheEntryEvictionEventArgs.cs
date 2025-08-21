@@ -13,18 +13,26 @@ public class FusionCacheEntryEvictionEventArgs
 	/// </summary>
 	/// <param name="key">The cache key related to the event.</param>
 	/// <param name="reason">The reason for the eviction.</param>
+	/// <param name="policyName">If the eviction was triggered by a configured eviction policy, its name; otherwise <c>null</c>.</param>
 	/// <param name="value">The value being evicted from the cache.</param>
-	public FusionCacheEntryEvictionEventArgs(string key, EvictionReason reason, object? value)
+	public FusionCacheEntryEvictionEventArgs(string key, EvictionReason reason, string? policyName, object? value)
 		: base(key)
 	{
 		Reason = reason;
+		PolicyName = policyName;
 		Value = value;
 	}
 
 	/// <summary>
-	/// The reason for the eviction.
+	/// The reason for the eviction. For capacity-based evictions triggered by an eviction policy,
+	/// this will be <see cref="EvictionReason.Capacity"/>.
 	/// </summary>
 	public EvictionReason Reason { get; }
+
+	/// <summary>
+	/// The eviction policy that triggered the eviction, if any.
+	/// </summary>
+	public string? PolicyName { get; }
 
 	/// <summary>
 	/// The value being evicted from the cache.

@@ -938,7 +938,7 @@ public sealed class FusionCacheEntryOptions
 		return new DateTimeOffset(FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(physicalDuration, this, true), TimeSpan.Zero);
 	}
 
-	internal (MemoryCacheEntryOptions? memoryEntryOptions, DateTimeOffset? absoluteExpiration) ToMemoryCacheEntryOptionsOrAbsoluteExpiration(FusionCacheMemoryEventsHub events, FusionCacheOptions options, ILogger? logger, string operationId, string key, long? size, byte? priority)
+	internal (MemoryCacheEntryOptions? memoryEntryOptions, DateTimeOffset? absoluteExpiration) ToMemoryCacheEntryOptionsOrAbsoluteExpiration(FusionCacheMemoryEventsHub events, FusionCacheOptions options, ILogger? logger, string operationId, string key, long? size, byte? priority, IFusionCacheEvictionPolicy? evictionPolicy = null, System.Collections.Concurrent.ConcurrentDictionary<string, byte>? capacityEvictions = null)
 	{
 		size ??= Size;
 		priority ??= (byte)Priority;
@@ -952,7 +952,8 @@ public sealed class FusionCacheEntryOptions
 				logger.Log(options.IncoherentOptionsNormalizationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): FailSafeMaxDuration {FailSafeMaxDuration} was lower than the Duration {Duration} on {Options}. Duration has been used instead.", options.CacheName, options.InstanceId, operationId, key, FailSafeMaxDuration.ToLogString(), Duration.ToLogString(), this.ToLogString());
 		}
 
-		if (size is null && priority.GetValueOrDefault(FusionCacheInternalUtils.CacheItemPriority_DefaultValue) == FusionCacheInternalUtils.CacheItemPriority_DefaultValue && events.HasEvictionSubscribers() == false)
+		// register a callback if we need size/priority options, or if we have eviction subscribers or an eviction policy
+		if (size is null && priority.GetValueOrDefault(FusionCacheInternalUtils.CacheItemPriority_DefaultValue) == FusionCacheInternalUtils.CacheItemPriority_DefaultValue && events.HasEvictionSubscribers() == false && evictionPolicy is null)
 		{
 			return (null, absoluteExpiration);
 		}
@@ -964,15 +965,30 @@ public sealed class FusionCacheEntryOptions
 			AbsoluteExpiration = absoluteExpiration
 		};
 
-		// EVENTS
-		if (events.HasEvictionSubscribers())
+		// EVENTS & POLICY CALLBACKS
+		if (events.HasEvictionSubscribers() || evictionPolicy is not null)
 		{
+			// We need to capture both events hub and eviction policy, and a set of keys being evicted because of capacity.
+			var state = new MemoryEvictionCallbackState(events, evictionPolicy, capacityEvictions);
 			res.RegisterPostEvictionCallback(
-				(key, entry, reason, state) =>
+				(objKey, objEntry, reason, stateObj) =>
 				{
-					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					var st = (MemoryEvictionCallbackState)stateObj;
+					var stringKey = objKey.ToString() ?? string.Empty;
+					// If this removal was initiated by a capacity eviction, skip raising a duplicate eviction event
+					if (st.CapacityEvictions is not null && st.CapacityEvictions.TryRemove(stringKey, out _))
+					{
+						// already handled by explicit eviction path
+						return;
+					}
+					// Update eviction policy state for TTL/manual removals
+					st.Policy?.OnRemove(stringKey);
+					if (st.EventsHub.HasEvictionSubscribers())
+					{
+						st.EventsHub.OnEviction(string.Empty, stringKey, reason, null, ((IFusionCacheMemoryEntry?)objEntry)?.Value);
+					}
 				},
-				events
+				state
 			);
 		}
 
@@ -1031,6 +1047,23 @@ public sealed class FusionCacheEntryOptions
 		}
 
 		return res;
+	}
+
+	/// <summary>
+	/// Internal container passed into memory eviction callbacks to coordinate between
+	/// the events hub, the eviction policy and any capacity-based eviction currently in flight.
+	/// </summary>
+	private sealed class MemoryEvictionCallbackState
+	{
+		public MemoryEvictionCallbackState(FusionCacheMemoryEventsHub eventsHub, IFusionCacheEvictionPolicy? policy, System.Collections.Concurrent.ConcurrentDictionary<string, byte>? capacityEvictions)
+		{
+			EventsHub = eventsHub;
+			Policy = policy;
+			CapacityEvictions = capacityEvictions;
+		}
+		public FusionCacheMemoryEventsHub EventsHub { get; }
+		public IFusionCacheEvictionPolicy? Policy { get; }
+		public System.Collections.Concurrent.ConcurrentDictionary<string, byte>? CapacityEvictions { get; }
 	}
 
 	internal TimeSpan GetAppropriateFactoryTimeout(bool hasFallbackValue)

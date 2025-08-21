@@ -12,9 +12,9 @@ namespace ZiggyCreatures.Caching.Fusion;
 /// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 /// </summary>
 [DebuggerDisplay($"{{{nameof(GetDebuggerDisplay)}(),nq}}")]
-public class FusionCacheOptions
-	: IOptions<FusionCacheOptions>
-{
+	public class FusionCacheOptions
+		: IOptions<FusionCacheOptions>
+	{
 	private string _cacheName;
 	private FusionCacheEntryOptions _defaultEntryOptions;
 	private FusionCacheEntryOptions _tagsDefaultEntryOptions;
@@ -64,8 +64,8 @@ public class FusionCacheOptions
 	/// <summary>
 	/// Creates a new instance of a <see cref="FusionCacheOptions"/> object.
 	/// </summary>
-	public FusionCacheOptions()
-	{
+		public FusionCacheOptions()
+		{
 		_cacheName = DefaultCacheName;
 
 		_defaultEntryOptions = new FusionCacheEntryOptions();
@@ -114,6 +114,9 @@ public class FusionCacheOptions
 		PluginsInfoLogLevel = LogLevel.Information;
 		PluginsErrorsLogLevel = LogLevel.Error;
 		MissingCacheKeyPrefixWarningLogLevel = LogLevel.Warning;
+
+		// EVICTION
+		EvictionPolicy = null;
 	}
 
 	/// <summary>
@@ -186,6 +189,12 @@ public class FusionCacheOptions
 			_tagsDefaultEntryOptions = value;
 		}
 	}
+
+	/// <summary>
+	/// The memory eviction policy to apply when storing entries in the in-memory cache.
+	/// If <see langword="null"/> no capacity-based eviction will be attempted.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
 
 	/// <summary>
 	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
@@ -597,6 +606,7 @@ public class FusionCacheOptions
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+			EvictionPolicy = EvictionPolicy,
 		};
 
 		return res;

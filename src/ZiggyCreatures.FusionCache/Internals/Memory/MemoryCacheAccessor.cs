@@ -37,6 +37,8 @@ internal sealed class MemoryCacheAccessor
 	private readonly FusionCacheOptions _options;
 	private readonly ILogger? _logger;
 	private readonly FusionCacheMemoryEventsHub _events;
+	// Used to suppress duplicate eviction events when we remove entries due to capacity.
+	private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _capacityEvictions = new();
 
 	public void UpdateEntryFromDistributedEntry<TValue>(string operationId, string key, FusionCacheMemoryEntry<TValue> memoryEntry, FusionCacheDistributedEntry<TValue> distributedEntry)
 	{
@@ -66,7 +68,16 @@ internal sealed class MemoryCacheAccessor
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] saving memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
-			var (memoryEntryOptions, absoluteExpiration) = options.ToMemoryCacheEntryOptionsOrAbsoluteExpiration(_events, _options, _logger, operationId, key, entry.Metadata?.Size, entry.Metadata?.Priority);
+			var (memoryEntryOptions, absoluteExpiration) = options.ToMemoryCacheEntryOptionsOrAbsoluteExpiration(
+				_events,
+				_options,
+				_logger,
+				operationId,
+				key,
+				entry.Metadata?.Size,
+				entry.Metadata?.Priority,
+				_options.EvictionPolicy,
+				_capacityEvictions);
 
 			if (memoryEntryOptions is not null)
 			{
@@ -81,8 +92,20 @@ internal sealed class MemoryCacheAccessor
 				throw new InvalidOperationException("No MemoryCacheEntryOptions or AbsoluteExpiration was determined: this should not be possible, WTH!?");
 			}
 
-			// EVENT
+			// Update eviction policy tracking for this set
+			_options.EvictionPolicy?.OnSet(key, entry.Metadata);
+			// Fire set event
 			_events.OnSet(operationId, key);
+			// After adding/updating the entry, see if we need to evict anything for capacity
+			if (_options.EvictionPolicy is not null)
+			{
+				var keysToEvict = _options.EvictionPolicy.GetKeysToEvict();
+				var policyName = _options.EvictionPolicy.Name;
+				foreach (var evictKey in keysToEvict)
+				{
+					EvictEntry(operationId, evictKey, policyName);
+				}
+			}
 		}
 		catch (Exception exc)
 		{
@@ -108,6 +131,8 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
+				// update eviction policy recency tracking on hit
+				_options.EvictionPolicy?.OnGet(key);
 			}
 			else
 			{
@@ -165,6 +190,8 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, isValid == false, activity);
+				// update eviction policy recency tracking on hit
+				_options.EvictionPolicy?.OnGet(key);
 			}
 			else
 			{
@@ -192,8 +219,7 @@ internal sealed class MemoryCacheAccessor
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
 			_cache.Remove(key);
-
-			// EVENT
+			// let the post-eviction callback handle policy OnRemove for manual removes
 			_events.OnRemove(operationId, key);
 		}
 		catch (Exception exc)
@@ -202,6 +228,24 @@ internal sealed class MemoryCacheAccessor
 			activity?.AddException(exc);
 			throw;
 		}
+	}
+
+	/// <summary>
+	/// Removes an entry from the memory cache due to capacity-based eviction.
+	/// This will mark the key being evicted, remove it from the underlying cache,
+	/// update eviction policy state and raise an eviction event with reason <see cref="EvictionReason.Capacity"/>.
+	/// </summary>
+	private void EvictEntry(string operationId, string key, string policyName)
+	{
+		// Mark as capacity removal to suppress the post-eviction callback from raising a duplicate event.
+		_capacityEvictions.TryAdd(key, 0);
+		// Capture current value before removal if needed by event
+		var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
+		_cache.Remove(key);
+		// EvictionPolicy.OnRemove has not been invoked by callback because we suppressed it; update now
+		_options.EvictionPolicy?.OnRemove(key);
+		// Fire explicit eviction event with capacity reason and policy name
+		_events.OnEviction(operationId, key, EvictionReason.Capacity, policyName, entry?.Value);
 	}
 
 	public bool ExpireEntry(string operationId, string key, long? timestampThreshold)
