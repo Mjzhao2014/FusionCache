@@ -1874,7 +1874,7 @@ public partial class L1Tests
 		// With jittering, some entries might still be alive, some might be expired
 		// This demonstrates that jittering is working (different expiration times)
 		// We can't assert exact numbers due to randomness, but we verify configuration works
-		Assert.True(survivingEntries >= 0 && survivingEntries <= 1000,
+		Assert.True(survivingEntries > 0 && survivingEntries < 1000,
 			$"Surviving entries after jittering should be between 0 and 1000, but got {survivingEntries}");
 
 

@@ -1622,7 +1622,7 @@ public partial class L1Tests
 		//Cache expired because the duration is maximum 1000ms
 		Thread.Sleep(300);
 		var value5 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
-		Assert.Equal(-1, value4);
+		Assert.Equal(-1, value5);
 
 	}
 
