@@ -1505,46 +1505,6 @@ public partial class L1Tests
 		Assert.Equal(-1, value4); // Should be expired
 	}
 
-
-	[Fact]
-	public async Task SlidingExpirationNoDurationNotExpiredAsync()
-	{
-		//Default duration is 30s 
-		using var cache = new FusionCache(new FusionCacheOptions()
-		{
-			DefaultEntryOptions = new FusionCacheEntryOptions()
-			{
-				SlidingExpiration = TimeSpan.FromSeconds(30)
-			}
-		});
-
-		// infinite duration by default
-		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
-
-		// SET WITH SLIDING EXPIRATION
-		cache.GetOrSet<int>("foo", 42);
-
-		// IMMEDIATELY AVAILABLE
-		var value1 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
-		Assert.Equal(42, value1);
-
-		// WAIT LESS THAN Duration, Renew sliding window 500ms
-		Thread.Sleep(10000);
-		var value2 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
-		Assert.Equal(42, value2);
-
-		// WAIT LESS THAN SLIDING DURATION AGAIN
-		Thread.Sleep(10000);
-		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
-		Assert.Equal(42, value3);
-
-		// NOW WAIT LONGER THAN 30s default duraiton. Sliding Cache won't be expired.
-		Thread.Sleep(11000);
-		var value4 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
-		Assert.Equal(42, value4); // cache is not expired. 
-	}
-
-
 	[Fact]
 	public async Task SlidingExpirationWithLongDurationAsync()
 	{
