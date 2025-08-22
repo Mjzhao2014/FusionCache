@@ -1068,6 +1068,83 @@ public sealed partial class FusionCache
 		}
 	}
 
+	/// <summary>
+	/// If sliding expiration is configured for the specified <see cref="FusionCacheEntryOptions"/> and the entry is not stale/fail-safe,
+	/// renews the expiration for both L1 and L2 caches based on the sliding window.
+	/// </summary>
+	internal void MaybeRenewOnAccess<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options)
+	{
+		// only consider sliding expiration if configured
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		// do not renew for stale/fail-safe values
+		if (entry.IsStale())
+			return;
+		var sliding = options.SlidingExpiration.Value;
+		var now = DateTimeOffset.UtcNow;
+		// compute new absolute expiration
+		DateTimeOffset newAbs;
+		if (options.HasExplicitDuration)
+		{
+			var absoluteMax = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(options.Duration);
+			newAbs = (now + sliding) <= absoluteMax ? now + sliding : absoluteMax;
+		}
+		else
+		{
+			newAbs = now + sliding;
+		}
+		// derive new relative TTL
+		var newDuration = newAbs - now;
+		// update entry logical expiration
+		entry.LogicalExpirationTimestamp = newAbs.UtcTicks;
+		// build new options with updated duration for TTL calculations
+		var renewOptions = options.Duplicate(newDuration);
+		// refresh in-memory cache
+		if (_mca.ShouldWrite(options))
+		{
+		_mca.SetEntry<TValue>(operationId, key, entry, renewOptions);
+		}
+		// refresh distributed cache
+		if (RequiresDistributedOperations(options))
+		{
+			DistributedSetEntry<TValue>(operationId, key, entry, renewOptions, default);
+		}
+	}
+
+	internal async ValueTask MaybeRenewOnAccessAsync<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options)
+	{
+		// only consider sliding expiration if configured
+		if (options.SlidingExpiration.HasValue == false)
+			return;
+		if (entry.IsStale())
+			return;
+		var sliding = options.SlidingExpiration.Value;
+		var now = DateTimeOffset.UtcNow;
+		DateTimeOffset newAbs;
+		if (options.HasExplicitDuration)
+		{
+			var absoluteMax = new DateTimeOffset(entry.Timestamp, TimeSpan.Zero).Add(options.Duration);
+			newAbs = (now + sliding) <= absoluteMax ? now + sliding : absoluteMax;
+		}
+		else
+		{
+			newAbs = now + sliding;
+		}
+		var newDuration = newAbs - now;
+		entry.LogicalExpirationTimestamp = newAbs.UtcTicks;
+		var renewOptions = options.Duplicate(newDuration);
+		// refresh memory
+		if (_mca.ShouldWrite(options))
+		{
+			_mca.SetEntry<TValue>(operationId, key, entry, renewOptions);
+		}
+		// refresh distributed cache asynchronously
+		if (RequiresDistributedOperations(options))
+		{
+			await DistributedSetEntryAsync<TValue>(operationId, key, entry, renewOptions, default).ConfigureAwait(false);
+		}
+	}
+
 	// IDISPOSABLE
 
 	private bool _disposedValue = false;

@@ -104,6 +104,8 @@ public partial class FusionCache
 		if (memoryEntryIsValid)
 		{
 			// VALID CACHE ENTRY
+			// SLIDING EXPIRATION RENEWAL
+			MaybeRenewOnAccess<TValue>(operationId, key, memoryEntry!, options);
 
 			// CHECK FOR EAGER REFRESH
 			if (isRealFactory && memoryEntry.ShouldEagerlyRefresh())
@@ -178,6 +180,9 @@ public partial class FusionCache
 			{
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
+
+				// SLIDING EXPIRATION RENEWAL
+				MaybeRenewOnAccess<TValue>(operationId, key, memoryEntry!, options);
 
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
@@ -350,6 +355,8 @@ public partial class FusionCache
 		}
 		else if (entry is not null)
 		{
+			// SLIDING EXPIRATION RENEWAL (if we hit a cached value)
+			MaybeRenewOnAccess<TValue>(operationId, key, entry, options);
 			// EVENT
 			_events.OnHit(operationId, key, isStale || entry.IsStale(), activity);
 		}
@@ -487,6 +494,8 @@ public partial class FusionCache
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry", CacheName, InstanceId, operationId, key);
+			// SLIDING EXPIRATION RENEWAL
+			MaybeRenewOnAccess<TValue>(operationId, key, memoryEntry!, options);
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
@@ -540,6 +549,8 @@ public partial class FusionCache
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
 			}
+			// SLIDING EXPIRATION RENEWAL
+			MaybeRenewOnAccess<TValue>(operationId, key, memoryEntry, options);
 
 			// EVENT
 			_events.OnHit(operationId, key, distributedEntry!.IsStale(), activity);

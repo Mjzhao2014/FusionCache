@@ -79,7 +79,29 @@ public sealed class FusionCacheDistributedEntry<TValue>
 
 	internal static FusionCacheDistributedEntry<TValue> CreateFromOptions(TValue value, long timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false);
+		// compute effective TTL for distributed cache
+		TimeSpan ttl;
+		if (isStale)
+		{
+			ttl = options.FailSafeThrottleDuration;
+		}
+		else
+		{
+			// base TTL for distributed caches: prefer distributed-specific if provided, else fall back to Duration
+			TimeSpan baseDur = options.DistributedCacheDuration ?? options.Duration;
+			if (options.SlidingExpiration.HasValue)
+			{
+				// if base duration is effectively infinite (Duration not explicitly set), use sliding TTL directly
+				ttl = (options.DistributedCacheDuration.HasValue || options.HasExplicitDuration)
+					? (options.SlidingExpiration.Value <= baseDur ? options.SlidingExpiration.Value : baseDur)
+					: options.SlidingExpiration.Value;
+			}
+			else
+			{
+				ttl = baseDur;
+			}
+		}
+		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(ttl, options, false);
 
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))
@@ -101,7 +123,26 @@ public sealed class FusionCacheDistributedEntry<TValue>
 	internal static FusionCacheDistributedEntry<TValue> CreateFromOtherEntry(IFusionCacheEntry entry, FusionCacheEntryOptions options)
 	{
 		var isStale = entry.IsStale();
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false, new DateTimeOffset(entry.Timestamp, TimeSpan.Zero));
+		TimeSpan ttl;
+		if (isStale)
+		{
+			ttl = options.FailSafeThrottleDuration;
+		}
+		else
+		{
+			TimeSpan baseDur = options.DistributedCacheDuration ?? options.Duration;
+			if (options.SlidingExpiration.HasValue)
+			{
+				ttl = (options.DistributedCacheDuration.HasValue || options.HasExplicitDuration)
+					? (options.SlidingExpiration.Value <= baseDur ? options.SlidingExpiration.Value : baseDur)
+					: options.SlidingExpiration.Value;
+			}
+			else
+			{
+				ttl = baseDur;
+			}
+		}
+		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(ttl, options, false, new DateTimeOffset(entry.Timestamp, TimeSpan.Zero));
 
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, entry.Metadata))
