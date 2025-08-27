@@ -351,7 +351,7 @@ public class EvictionTests
 				{
 					// Wait for all threads to be ready
 					barrier.SignalAndWait(TimeSpan.FromSeconds(5));
-					
+
 					// All threads simultaneously try to add entries, forcing same eviction scenario
 					await cache.SetAsync($"trigger{index}", $"triggerValue{index}");
 				}));
@@ -368,7 +368,7 @@ public class EvictionTests
 			// This detects the race condition where multiple threads evict the same key
 			var evictedKeys = evictionEventsList.Select(e => e.Key).ToList();
 			var distinctKeys = evictedKeys.Distinct().ToList();
-			
+
 			Assert.True(distinctKeys.Count == evictedKeys.Count,
 				$"Duplicate eviction events detected! Evicted keys: [{string.Join(", ", evictedKeys)}], " +
 				$"Distinct keys: [{string.Join(", ", distinctKeys)}]");
@@ -495,9 +495,9 @@ public class EvictionTests
 			// Assert - key2 or key3 should be evicted (least recently used)
 			var key1Value = await cache.GetOrDefaultAsync<string>("key1");
 			var key2Value = await cache.GetOrDefaultAsync<string>("key2");
-			var key3Value = await cache.GetOrDefaultAsync<string>("key3");	
+			var key3Value = await cache.GetOrDefaultAsync<string>("key3");
 			var key4Value = await cache.GetOrDefaultAsync<string>("key4");
-			
+
 			Assert.Equal("value1", key1Value); // Should still exist (most recently accessed)
 			Assert.Null(key2Value); // Should be evicted (least recently accessed)
 			Assert.Equal("value3", key3Value); // Should exist (less recently accessed than key1)
@@ -538,7 +538,7 @@ public class EvictionTests
 			var key2Value = await cache.GetOrDefaultAsync<string>("key2");
 			var key3Value = await cache.GetOrDefaultAsync<string>("key3");
 			var key4Value = await cache.GetOrDefaultAsync<string>("key4");
-			
+
 			Assert.Equal("value1", key1Value); // Should still exist (most frequently accessed)
 			Assert.Null(key2Value); // Should be evicted (least frequently accessed)
 			Assert.Equal("value3", key3Value); // Should exist (less frequently accessed than key1)
@@ -579,7 +579,7 @@ public class EvictionTests
 			var key2Value = await cache.GetOrDefaultAsync<string>("key2");
 			var key3Value = await cache.GetOrDefaultAsync<string>("key3");
 			var key4Value = await cache.GetOrDefaultAsync<string>("key4");
-			
+
 			Assert.Equal("value1", key1Value); // Should still exist (most frequently accessed)
 			Assert.Null(key2Value); // Should be evicted (least frequently accessed)
 			Assert.Equal("value3", key3Value); // Should exist (less frequently accessed than key1)
@@ -635,6 +635,85 @@ public class EvictionTests
 				$"Expected at least {minBatchSize} evictions, but got {evictionEvents.Count}");
 			Assert.True(evictionEvents.Count <= maxBatchSize,
 				$"Expected at most {maxBatchSize} evictions, but got {evictionEvents.Count}");
+		}
+	}
+
+	[Theory]
+	[InlineData("LRU")]
+	[InlineData("LFU")]
+	public async Task EvictionPolicy_ConcurrentSetSameKey_SingleEntryOnly(string policyType)
+	{
+		// Arrange
+		var evictionEvents = new ConcurrentBag<FusionCacheEntryEvictionEventArgs>();
+		var config = new FusionCacheEvictionPolicyConfig
+		{
+			MaxEntryCount = 3,
+			EvictionPercentage = 0.3
+		};
+
+		var evictionPolicy = policyType == "LRU"
+			? (IFusionCacheEvictionPolicy)new LruEvictionPolicy(config)
+			: new LfuEvictionPolicy(config);
+
+		var options = new FusionCacheOptions
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions { Duration = TimeSpan.FromMinutes(10) },
+			EvictionPolicy = evictionPolicy
+		};
+		var cache = new FusionCache(options);
+
+		cache.Events.Memory.Eviction += (sender, args) =>
+		{
+			if (args.Reason == EvictionReason.Capacity)
+			{
+				evictionEvents.Add(args);
+			}
+		};
+
+		using (cache)
+		{
+			const int concurrentOperations = 20;
+			const string targetKey = "stressKey";
+			var barrier = new Barrier(concurrentOperations);
+			var setTasks = new List<Task>();
+
+			// Act - Stress test with many concurrent Set operations on the same key
+			for (int i = 0; i < concurrentOperations; i++)
+			{
+				int operationId = i;
+				setTasks.Add(Task.Run(async () =>
+				{
+					// Wait for all threads to be ready
+					barrier.SignalAndWait(TimeSpan.FromSeconds(5));
+
+					// All operations try to Set the same key
+					await cache.SetAsync(targetKey, $"stressValue_{operationId}");
+				}));
+			}
+
+			await Task.WhenAll(setTasks);
+			await Task.Delay(100); // Allow operations to complete
+
+			// Assert - Verify only one entry exists for the target key
+			var targetValue = await cache.GetOrDefaultAsync<string>(targetKey);
+			Assert.NotNull(targetValue);
+			Assert.StartsWith("stressValue_", targetValue);
+
+			// Fill cache to trigger evictions and verify no duplicates in eviction handling
+			await cache.SetAsync("filler1", "fillerValue1");
+			await cache.SetAsync("filler2", "fillerValue2");
+			await cache.SetAsync("filler3", "fillerValue3"); // This should trigger eviction
+			await Task.Delay(200); // Allow evictions to complete
+
+			// Verify no duplicate evictions occurred
+			var evictionEventsList = evictionEvents.ToList();
+			if (evictionEventsList.Any())
+			{
+				var evictedKeys = evictionEventsList.Select(e => e.Key).ToList();
+				var distinctEvictedKeys = evictedKeys.Distinct().ToList();
+				Assert.True(distinctEvictedKeys.Count == evictedKeys.Count,
+					$"Duplicate eviction events detected in {policyType} policy! Evicted keys: [{string.Join(", ", evictedKeys)}], Distinct keys: [{string.Join(", ", distinctEvictedKeys)}]");
+			}
 		}
 	}
 }
