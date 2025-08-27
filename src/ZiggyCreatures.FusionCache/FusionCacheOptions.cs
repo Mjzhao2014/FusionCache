@@ -527,6 +527,11 @@ public class FusionCacheOptions
 	/// </summary>
 	public LogLevel MissingCacheKeyPrefixWarningLogLevel { get; set; }
 
+	/// <summary>
+	/// Optional eviction policy for managing in-memory entry limits; if null, FusionCache will not evict based on capacity.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
+
 	FusionCacheOptions IOptions<FusionCacheOptions>.Value
 	{
 		get { return this; }
@@ -597,6 +602,7 @@ public class FusionCacheOptions
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+			EvictionPolicy = EvictionPolicy,
 		};
 
 		return res;

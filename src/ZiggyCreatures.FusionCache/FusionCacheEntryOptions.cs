@@ -967,13 +967,16 @@ public sealed class FusionCacheEntryOptions
 		// EVENTS
 		if (events.HasEvictionSubscribers())
 		{
-			res.RegisterPostEvictionCallback(
-				(key, entry, reason, state) =>
+			// Avoid duplicate eviction events when a custom eviction policy removes entries (those removals will produce EvictionReason.Removed).
+			var evictPolicy = options.EvictionPolicy;
+			res.RegisterPostEvictionCallback((key, entry, reason, state) =>
+			{
+				if (evictPolicy is not null && reason == EvictionReason.Removed)
 				{
-					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, ((IFusionCacheMemoryEntry?)entry)?.Value);
-				},
-				events
-			);
+					return;
+				}
+				((FusionCacheMemoryEventsHub)state!).OnEviction(string.Empty, key.ToString() ?? string.Empty, reason, null, ((IFusionCacheMemoryEntry?)entry)?.Value);
+			}, events);
 		}
 
 		return (res, null);

@@ -44,6 +44,8 @@ internal sealed class MemoryCacheAccessor
 		using var activity = Activities.SourceMemoryLevel.StartActivityWithCommonTags(Activities.Names.MemorySet, _options.CacheName, _options.InstanceId!, key, operationId, CacheLevelKind.Memory);
 
 		memoryEntry.UpdateFromDistributedEntry(distributedEntry);
+		// update policy recency/frequency for this key
+		_options.EvictionPolicy?.OnSet(key, memoryEntry.Metadata);
 	}
 
 	public void SetEntry<TValue>(string operationId, string key, IFusionCacheMemoryEntry entry, FusionCacheEntryOptions options, bool skipPhysicalSet = false)
@@ -81,6 +83,17 @@ internal sealed class MemoryCacheAccessor
 				throw new InvalidOperationException("No MemoryCacheEntryOptions or AbsoluteExpiration was determined: this should not be possible, WTH!?");
 			}
 
+			// Update eviction policy tracking after a write
+			_options.EvictionPolicy?.OnSet(key, entry.Metadata);
+			// Check if eviction is needed and evict entries accordingly
+			var toEvict = _options.EvictionPolicy?.GetKeysToEvict();
+			if (toEvict is not null)
+			{
+				foreach (var k in toEvict)
+				{
+					EvictEntry(operationId, k, _options.EvictionPolicy!.Name);
+				}
+			}
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -108,6 +121,7 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
+				_options.EvictionPolicy?.OnGet(key);
 			}
 			else
 			{
@@ -165,6 +179,7 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, isValid == false, activity);
+				_options.EvictionPolicy?.OnGet(key);
 			}
 			else
 			{
@@ -192,6 +207,7 @@ internal sealed class MemoryCacheAccessor
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
 			_cache.Remove(key);
+			_options.EvictionPolicy?.OnRemove(key);
 
 			// EVENT
 			_events.OnRemove(operationId, key);
@@ -202,6 +218,22 @@ internal sealed class MemoryCacheAccessor
 			activity?.AddException(exc);
 			throw;
 		}
+	}
+
+	/// <summary>
+	/// Removes the specified key from the underlying memory cache as part of an eviction cycle, and emits an Eviction event with reason Capacity.
+	/// This will update the configured eviction policy and trigger any eviction event subscribers.
+	/// </summary>
+	/// <param name="operationId">Current operation id.</param>
+	/// <param name="key">Cache key to evict.</param>
+	/// <param name="policyName">Name of the policy causing eviction.</param>
+	internal void EvictEntry(string operationId, string key, string policyName)
+	{
+		// read the value before removal to include in the event
+		var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
+		_cache.Remove(key);
+		_options.EvictionPolicy?.OnRemove(key);
+		_events.OnEviction(operationId, key, EvictionReason.Capacity, policyName, entry?.Value);
 	}
 
 	public bool ExpireEntry(string operationId, string key, long? timestampThreshold)
