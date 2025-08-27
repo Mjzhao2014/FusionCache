@@ -965,12 +965,30 @@ public sealed class FusionCacheEntryOptions
 		};
 
 		// EVENTS
-		if (events.HasEvictionSubscribers())
+		// HookPostEviction callback if there are any eviction subscribers or if an eviction policy is configured.
+		if (events.HasEvictionSubscribers() || options.EvictionPolicy is not null)
 		{
 			res.RegisterPostEvictionCallback(
 				(key, entry, reason, state) =>
 				{
-					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					if (state is FusionCacheMemoryEventsHub hub)
+					{
+						var stringKey = key.ToString() ?? "";
+						// Check if this eviction was suppressed and should be considered a capacity eviction.
+						string? policyName = null;
+						var effectiveReason = reason;
+						if (hub.TryRetrieveSuppressedEviction(stringKey, out var polName))
+						{
+							effectiveReason = EvictionReason.Capacity;
+							policyName = polName;
+						}
+					// Update eviction policy state for non-capacity evictions.
+					if (hub.CurrentEvictionPolicy is IFusionCacheEvictionPolicy policy && effectiveReason != EvictionReason.Capacity)
+					{
+						policy.OnRemove(stringKey);
+					}
+						hub.OnEviction(string.Empty, stringKey, effectiveReason, policyName, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					}
 				},
 				events
 			);

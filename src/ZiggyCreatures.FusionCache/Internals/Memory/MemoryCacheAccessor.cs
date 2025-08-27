@@ -71,10 +71,36 @@ internal sealed class MemoryCacheAccessor
 			if (memoryEntryOptions is not null)
 			{
 				_cache.Set<IFusionCacheMemoryEntry>(key, entry, memoryEntryOptions);
+				// Update eviction policy if configured
+				var policy = _options.EvictionPolicy;
+				if (policy is not null)
+				{
+					policy.OnSet(key, entry.Metadata);
+					// Check if eviction should be triggered
+					var keysToEvict = policy.GetKeysToEvict();
+					foreach (var evictKey in keysToEvict)
+					{
+						// Mark eviction as capacity driven
+						_events.SuppressEvictionNotification(evictKey, policy.Name);
+						_cache.Remove(evictKey);
+					}
+				}
 			}
 			else if (absoluteExpiration is not null)
 			{
 				_cache.Set<IFusionCacheMemoryEntry>(key, entry, absoluteExpiration.Value);
+				// Update eviction policy if configured
+				var policy = _options.EvictionPolicy;
+				if (policy is not null)
+				{
+					policy.OnSet(key, entry.Metadata);
+					var keysToEvict = policy.GetKeysToEvict();
+					foreach (var evictKey in keysToEvict)
+					{
+						_events.SuppressEvictionNotification(evictKey, policy.Name);
+						_cache.Remove(evictKey);
+					}
+				}
 			}
 			else
 			{
@@ -104,15 +130,17 @@ internal sealed class MemoryCacheAccessor
 		{
 			var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
 
-			// EVENT
-			if (entry is not null)
-			{
-				_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
-			}
-			else
-			{
-				_events.OnMiss(operationId, key, activity);
-			}
+				// EVENT
+				if (entry is not null)
+				{
+					_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
+					// Update eviction policy on read
+					_options.EvictionPolicy?.OnGet(key);
+				}
+				else
+				{
+					_events.OnMiss(operationId, key, activity);
+				}
 
 			return entry;
 		}
@@ -161,15 +189,17 @@ internal sealed class MemoryCacheAccessor
 				}
 			}
 
-			// EVENT
-			if (entry is not null)
-			{
-				_events.OnHit(operationId, key, isValid == false, activity);
-			}
-			else
-			{
-				_events.OnMiss(operationId, key, activity);
-			}
+				// EVENT
+				if (entry is not null)
+				{
+					_events.OnHit(operationId, key, isValid == false, activity);
+					// Update eviction policy on read
+					_options.EvictionPolicy?.OnGet(key);
+				}
+				else
+				{
+					_events.OnMiss(operationId, key, activity);
+				}
 
 			return (entry, isValid);
 		}

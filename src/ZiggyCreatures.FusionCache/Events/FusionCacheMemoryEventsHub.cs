@@ -1,17 +1,27 @@
 ﻿using System.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Internals;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
 
 namespace ZiggyCreatures.Caching.Fusion.Events;
 
-/// <summary>
-/// The events hub for events specific for the memory level.
-/// </summary>
-public sealed class FusionCacheMemoryEventsHub
-	: FusionCacheCommonEventsHub
-{
+	/// <summary>
+	/// The events hub for events specific for the memory level.
+	/// </summary>
+	public sealed class FusionCacheMemoryEventsHub
+		: FusionCacheCommonEventsHub
+	{
+		private readonly ConcurrentDictionary<string, string> _suppressedEvictionKeys = new();
+
+		/// <summary>
+		/// Internal accessor to the currently configured eviction policy, if any.
+		/// </summary>
+		internal IFusionCacheEvictionPolicy? CurrentEvictionPolicy
+		{
+			get { return _options.EvictionPolicy; }
+		}
 	/// <summary>
 	/// Initializes a new instance of the <see cref="FusionCacheMemoryEventsHub" /> class.
 	/// </summary>
@@ -44,10 +54,35 @@ public sealed class FusionCacheMemoryEventsHub
 
 	internal void OnEviction(string operationId, string key, EvictionReason reason, object? value)
 	{
+		OnEviction(operationId, key, reason, null, value);
+	}
+
+	internal void OnEviction(string operationId, string key, EvictionReason reason, string? policyName, object? value)
+	{
 		// METRIC
 		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()));
 
-		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, policyName ?? string.Empty, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+	}
+
+	/// <summary>
+	/// Marks an eviction event for the specified key as originating from a capacity-driven policy eviction,
+	/// so that the normal PostEviction callback can override the reason and policy name when raising the event.
+	/// </summary>
+	/// <param name="key">The cache key to suppress the default eviction reason for.</param>
+	/// <param name="policyName">The policy name to associate with the eviction.</param>
+	internal void SuppressEvictionNotification(string key, string policyName)
+	{
+		_suppressedEvictionKeys[key] = policyName;
+	}
+
+	/// <summary>
+	/// Try to remove a key that was previously suppressed for eviction notifications,
+	/// returning the policy name if present.
+	/// </summary>
+	internal bool TryRetrieveSuppressedEviction(string key, out string policyName)
+	{
+		return _suppressedEvictionKeys.TryRemove(key, out policyName);
 	}
 
 	internal void OnExpire(string operationId, string key)

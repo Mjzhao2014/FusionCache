@@ -188,6 +188,12 @@ public class FusionCacheOptions
 	}
 
 	/// <summary>
+	/// Optional L1 (in-memory) eviction policy to enforce capacity constraints on the memory cache.
+	/// When null, no capacity-based eviction will be performed and the underlying memory cache controls eviction via expiration/priority.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
+
+	/// <summary>
 	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/CacheLevels.md"/>
@@ -597,6 +603,7 @@ public class FusionCacheOptions
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+			EvictionPolicy = EvictionPolicy,
 		};
 
 		return res;
