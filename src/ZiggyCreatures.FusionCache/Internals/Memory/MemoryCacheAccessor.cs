@@ -81,6 +81,22 @@ internal sealed class MemoryCacheAccessor
 				throw new InvalidOperationException("No MemoryCacheEntryOptions or AbsoluteExpiration was determined: this should not be possible, WTH!?");
 			}
 
+			// Update eviction policy structures and perform eviction if needed
+			var policy = _options.EvictionPolicy;
+			if (policy is not null)
+			{
+				policy.OnSet(key, entry.Metadata);
+				var keysToEvict = policy.GetKeysToEvict();
+				foreach (var victimKey in keysToEvict)
+				{
+					// Wrap removal so we can override eviction reason to Capacity
+					using (_events.BeginEvictionOverride(EvictionReason.Capacity, policy.Name))
+					{
+						RemoveEntry(operationId, victimKey);
+					}
+				}
+			}
+
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -103,6 +119,10 @@ internal sealed class MemoryCacheAccessor
 		try
 		{
 			var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
+			if (entry is not null)
+			{
+				_options.EvictionPolicy?.OnGet(key);
+			}
 
 			// EVENT
 			if (entry is not null)
@@ -160,6 +180,11 @@ internal sealed class MemoryCacheAccessor
 					isValid = true;
 				}
 			}
+			// update policy access if we found something
+			if (entry is not null)
+			{
+				_options.EvictionPolicy?.OnGet(key);
+			}
 
 			// EVENT
 			if (entry is not null)
@@ -190,7 +215,8 @@ internal sealed class MemoryCacheAccessor
 		{
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
-
+			// update the eviction policy tracking
+			_options.EvictionPolicy?.OnRemove(key);
 			_cache.Remove(key);
 
 			// EVENT

@@ -42,12 +42,41 @@ public sealed class FusionCacheMemoryEventsHub
 		return Eviction is not null;
 	}
 
-	internal void OnEviction(string operationId, string key, EvictionReason reason, object? value)
+	// Keep a thread-local override when performing capacity evictions, to adjust reason/policyName.
+	private readonly System.Threading.AsyncLocal<(EvictionReason Reason, string? PolicyName)?> _evictionOverride = new();
+
+	internal IDisposable BeginEvictionOverride(EvictionReason reason, string? policyName)
 	{
+		_evictionOverride.Value = (reason, policyName);
+		return new OverrideScope(this);
+	}
+
+	private void ClearEvictionOverride()
+	{
+		_evictionOverride.Value = null;
+	}
+
+	internal void OnEviction(string operationId, string key, EvictionReason reason, string? policyName, object? value)
+	{
+		var overrideVal = _evictionOverride.Value;
+		if (overrideVal.HasValue)
+		{
+			reason = overrideVal.Value.Reason;
+			policyName = overrideVal.Value.PolicyName;
+			// reset after one use to avoid leaking across calls
+			ClearEvictionOverride();
+		}
 		// METRIC
 		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()));
 
-		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, policyName, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+	}
+
+	private sealed class OverrideScope : IDisposable
+	{
+		private readonly FusionCacheMemoryEventsHub _hub;
+		public OverrideScope(FusionCacheMemoryEventsHub hub) => _hub = hub;
+		public void Dispose() => _hub.ClearEvictionOverride();
 	}
 
 	internal void OnExpire(string operationId, string key)
