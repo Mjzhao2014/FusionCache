@@ -165,10 +165,10 @@ public sealed partial class FusionCache
 		_plugins = [];
 
 		// MEMORY CACHE
-		_mca = new MemoryCacheAccessor(memoryCache, _options, _logger, _events.Memory);
+		_mca = new MemoryCacheAccessor(memoryCache, _options, _logger, _events.Memory, _options.EvictionPolicy);
 		_mcaCanClear = _mca.CanClear;
 
-		// DISTRIBUTED CACHE
+		// DISTRIBUTED CACHEgit 
 		_dca = null;
 
 		// BACKPLANE

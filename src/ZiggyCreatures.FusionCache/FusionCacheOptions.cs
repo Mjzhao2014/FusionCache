@@ -595,12 +595,21 @@ public class FusionCacheOptions
 
 			PluginsErrorsLogLevel = PluginsErrorsLogLevel,
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
-
+			
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+
+			EvictionPolicy = EvictionPolicy,
 		};
 
 		return res;
 	}
+
+	/// <summary>
+	/// Optional eviction policy to use for the in-memory cache.
+	/// When set, the policy will be consulted after each set/get/remove to automatically remove entries when capacity limits are reached.
+	/// If left <see langword="null"/>, no capacity-based eviction policy will be applied.
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
 
 	private string GetDebuggerDisplay()
 	{

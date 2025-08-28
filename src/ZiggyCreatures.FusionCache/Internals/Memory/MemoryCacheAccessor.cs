@@ -3,14 +3,22 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Events;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
+using System.Threading;
 using ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 
 namespace ZiggyCreatures.Caching.Fusion.Internals.Memory;
 
+
 internal sealed class MemoryCacheAccessor
 	: IDisposable
 {
-	public MemoryCacheAccessor(IMemoryCache? memoryCache, FusionCacheOptions options, ILogger? logger, FusionCacheMemoryEventsHub events)
+	// track whether current Remove call is due to capacity eviction and which policy triggered it
+	internal static readonly AsyncLocal<string?> CurrentEvictionPolicyName = new();
+	internal static readonly AsyncLocal<string?> CurrentEvictionOperationId = new();
+
+	private readonly IFusionCacheEvictionPolicy? _evictionPolicy;
+
+	public MemoryCacheAccessor(IMemoryCache? memoryCache, FusionCacheOptions options, ILogger? logger, FusionCacheMemoryEventsHub events, IFusionCacheEvictionPolicy? evictionPolicy = null)
 	{
 		if (memoryCache is not null)
 		{
@@ -29,6 +37,7 @@ internal sealed class MemoryCacheAccessor
 		_options = options;
 		_logger = logger;
 		_events = events;
+		_evictionPolicy = evictionPolicy;
 	}
 
 	private IMemoryCache _cache;
@@ -81,6 +90,10 @@ internal sealed class MemoryCacheAccessor
 				throw new InvalidOperationException("No MemoryCacheEntryOptions or AbsoluteExpiration was determined: this should not be possible, WTH!?");
 			}
 
+			// update eviction policy tracking and possibly evict
+			_evictionPolicy?.OnSet(key, entry.Metadata);
+			EvictEntriesIfNeeded(operationId);
+
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -103,6 +116,10 @@ internal sealed class MemoryCacheAccessor
 		try
 		{
 			var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
+			if (entry is not null)
+			{
+				_evictionPolicy?.OnGet(key);
+			}
 
 			// EVENT
 			if (entry is not null)
@@ -161,9 +178,9 @@ internal sealed class MemoryCacheAccessor
 				}
 			}
 
-			// EVENT
 			if (entry is not null)
 			{
+				_evictionPolicy?.OnGet(key);
 				_events.OnHit(operationId, key, isValid == false, activity);
 			}
 			else
@@ -181,6 +198,27 @@ internal sealed class MemoryCacheAccessor
 		}
 	}
 
+	/// <summary>
+	/// Consults the configured eviction policy (if any) and removes entries if capacity limits are reached.
+	/// This will trigger eviction callbacks with <see cref="EvictionReason.Capacity"/> and the policy name.
+	/// </summary>
+	private void EvictEntriesIfNeeded(string operationId)
+	{
+		if (_evictionPolicy is null)
+			return;
+		foreach (var key in _evictionPolicy.GetKeysToEvict())
+		{
+			// indicate to the eviction callback that this remove is capacity-based
+			CurrentEvictionOperationId.Value = operationId;
+			CurrentEvictionPolicyName.Value = _evictionPolicy.Name;
+			// remove from policy tracking first
+			_evictionPolicy.OnRemove(key);
+			_cache.Remove(key);
+			CurrentEvictionOperationId.Value = null;
+			CurrentEvictionPolicyName.Value = null;
+		}
+	}
+
 	public void RemoveEntry(string operationId, string key)
 	{
 		// ACTIVITY
@@ -191,9 +229,13 @@ internal sealed class MemoryCacheAccessor
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
+			// ensure any PostEvictionCallback sees the correct operationId/policy context
+			CurrentEvictionOperationId.Value = operationId;
+			CurrentEvictionPolicyName.Value = null;
+			_evictionPolicy?.OnRemove(key);
 			_cache.Remove(key);
-
-			// EVENT
+			CurrentEvictionOperationId.Value = null;
+			// do not raise Eviction event here (it will be raised by the eviction callback); only raise Remove semantics
 			_events.OnRemove(operationId, key);
 		}
 		catch (Exception exc)

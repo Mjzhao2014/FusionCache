@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
+// leave one using for MemoryCacheAccessor imports
 using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Events;
 using ZiggyCreatures.Caching.Fusion.Internals;
@@ -970,7 +971,11 @@ public sealed class FusionCacheEntryOptions
 			res.RegisterPostEvictionCallback(
 				(key, entry, reason, state) =>
 				{
-					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					// check if this remove was part of a policy-driven eviction
+					var policyName = MemoryCacheAccessor.CurrentEvictionPolicyName.Value;
+					var opId = MemoryCacheAccessor.CurrentEvictionOperationId.Value ?? string.Empty;
+					var finalReason = policyName is not null ? EvictionReason.Capacity : reason;
+					((FusionCacheMemoryEventsHub?)state)?.OnEviction(opId, key.ToString() ?? "", finalReason, policyName, ((IFusionCacheMemoryEntry?)entry)?.Value);
 				},
 				events
 			);

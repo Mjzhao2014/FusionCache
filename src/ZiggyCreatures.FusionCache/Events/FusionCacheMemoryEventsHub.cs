@@ -42,12 +42,12 @@ public sealed class FusionCacheMemoryEventsHub
 		return Eviction is not null;
 	}
 
-	internal void OnEviction(string operationId, string key, EvictionReason reason, object? value)
+	internal void OnEviction(string operationId, string key, EvictionReason reason, string? policyName, object? value)
 	{
 		// METRIC
 		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()));
 
-		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, policyName ?? string.Empty, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
 	}
 
 	internal void OnExpire(string operationId, string key)
