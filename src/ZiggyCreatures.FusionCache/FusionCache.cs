@@ -13,6 +13,7 @@ using ZiggyCreatures.Caching.Fusion.Internals.Backplane;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
 using ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 using ZiggyCreatures.Caching.Fusion.Internals.Memory;
+using ZiggyCreatures.Caching.Fusion.Internals.Dependencies;
 using ZiggyCreatures.Caching.Fusion.Locking;
 using ZiggyCreatures.Caching.Fusion.Plugins;
 using ZiggyCreatures.Caching.Fusion.Serialization;
@@ -63,6 +64,10 @@ public sealed partial class FusionCache
 	private readonly FusionCacheEntryOptions _cascadeRemoveByTagEntryOptions;
 
 	internal readonly string TagInternalCacheKeyPrefix;
+
+	// DEPENDENCIES
+	internal readonly DependencyTracker _dependencyTracker;
+	private static readonly ThreadLocal<HashSet<string>> _processingDependencies = new(() => new HashSet<string>());
 
 	internal const string ClearRemoveTag = "!";
 	internal readonly string ClearRemoveTagCacheKey;
@@ -186,6 +191,9 @@ public sealed partial class FusionCache
 		ClearExpireTimestamp = -1;
 		ClearExpireTagCacheKey = GetTagCacheKey(ClearExpireTag);
 		ClearExpireTagInternalCacheKey = GetTagInternalCacheKey(ClearExpireTag);
+
+		// DEPENDENCIES
+		_dependencyTracker = new DependencyTracker();
 
 		// CHECK FOR CACHE KEY PREFIX
 		if (memoryCache is not null && CacheName != FusionCacheOptions.DefaultCacheName && string.IsNullOrWhiteSpace(_options.CacheKeyPrefix))

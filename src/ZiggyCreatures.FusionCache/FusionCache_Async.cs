@@ -709,6 +709,10 @@ public partial class FusionCache
 
 		try
 		{
+			// Check if entry already exists to determine if this is an update
+			var existingEntry = _mca.GetEntryOrNull(operationId, key);
+			var isUpdate = existingEntry != null;
+
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
@@ -720,6 +724,19 @@ public partial class FusionCache
 			if (RequiresDistributedOperations(options))
 			{
 				await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+			}
+
+			// DEPENDENCIES
+			if (options.Dependencies != null)
+			{
+				_dependencyTracker.RemoveAllDependencies(key);
+				_dependencyTracker.AddDependencies(key, options.Dependencies);
+			}
+
+			// CASCADING INVALIDATION (only for updates, not new entries)
+			if (isUpdate)
+			{
+				await ProcessDependencyChangeAsync(operationId, key, token).ConfigureAwait(false);
 			}
 
 			// EVENT
@@ -757,6 +774,12 @@ public partial class FusionCache
 				await DistributedRemoveEntryAsync(operationId, key, options, token).ConfigureAwait(false);
 			}
 
+			// CLEANUP DEPENDENCIES
+			_dependencyTracker.RemoveAllDependencies(key);
+
+			// CASCADING INVALIDATION
+			await ProcessDependencyChangeAsync(operationId, key, token).ConfigureAwait(false);
+
 			// EVENT
 			_events.OnRemove(operationId, key);
 		}
@@ -784,7 +807,7 @@ public partial class FusionCache
 
 	// EXPIRE
 
-	private async ValueTask ExpireInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+	private async ValueTask ExpireInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool processDependencies = true)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -806,6 +829,15 @@ public partial class FusionCache
 				await DistributedExpireEntryAsync(operationId, key, options, token).ConfigureAwait(false);
 			}
 
+			// CLEANUP DEPENDENCIES
+			_dependencyTracker.RemoveAllDependencies(key);
+
+			// CASCADING INVALIDATION
+			if (processDependencies)
+			{
+				await ProcessDependencyChangeAsync(operationId, key, token).ConfigureAwait(false);
+			}
+
 			// EVENT
 			_events.OnExpire(operationId, key);
 		}
@@ -814,6 +846,59 @@ public partial class FusionCache
 			activity?.SetStatus(ActivityStatusCode.Error, exc.Message);
 			activity?.AddException(exc);
 			throw;
+		}
+	}
+
+	private async ValueTask ProcessDependencyChangeAsync(string operationId, string dependencyKey, CancellationToken token = default)
+	{
+		// Prevent infinite recursion
+		var processingSet = _processingDependencies.Value;
+		if (processingSet.Contains(dependencyKey))
+			return;
+
+		var dependents = _dependencyTracker.GetDependents(dependencyKey);
+		if (dependents == null || dependents.Count == 0)
+			return;
+
+		processingSet.Add(dependencyKey);
+		try
+		{
+			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
+				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): processing dependency change for {DependentCount} dependents", CacheName, InstanceId, operationId, dependencyKey, dependents.Count);
+
+			foreach (var dependentKey in dependents)
+			{
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={DependencyKey}): invalidating dependent key {DependentKey}", CacheName, InstanceId, operationId, dependencyKey, dependentKey);
+
+				try
+				{
+					await ExpireInternalAsync(dependentKey, _cascadeRemoveByTagEntryOptions, token, processDependencies: false).ConfigureAwait(false);
+				}
+				catch (Exception exc)
+				{
+					if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+						_logger.Log(LogLevel.Warning, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={DependencyKey}): error while invalidating dependent key {DependentKey}", CacheName, InstanceId, operationId, dependencyKey, dependentKey);
+				}
+			}
+
+			// Send backplane notification
+			if (HasBackplane && _defaultEntryOptions.SkipBackplaneNotifications == false)
+			{
+				await BackplaneNotifyDependencyChangedAsync(operationId, dependencyKey, token).ConfigureAwait(false);
+			}
+		}
+		finally
+		{
+			processingSet.Remove(dependencyKey);
+		}
+	}
+
+	private async ValueTask BackplaneNotifyDependencyChangedAsync(string operationId, string key, CancellationToken token = default)
+	{
+		if (_bpa is not null)
+		{
+			await _bpa.PublishDependencyChangedAsync(operationId, key, FusionCacheInternalUtils.GetCurrentTimestamp(), _defaultEntryOptions, false, false, token).ConfigureAwait(false);
 		}
 	}
 

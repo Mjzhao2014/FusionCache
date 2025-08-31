@@ -450,12 +450,21 @@ public sealed class FusionCacheEntryOptions
 	/// </summary>
 	public bool EnableAutoClone { get; set; }
 
+	/// <summary>
+	/// Specifies the cache keys that this entry depends on. When any of these dependency keys are modified or removed,
+	/// this entry will be automatically invalidated (expired or removed based on fail-safe settings).
+	/// <br/><br/>
+	/// This enables cascading invalidation where changes to parent entries automatically invalidate dependent child entries.
+	/// </summary>
+	public IEnumerable<string>? Dependencies { get; set; }
+
 	internal bool IsSafeForAdaptiveCaching { get; set; }
 
 	/// <inheritdoc/>
 	public override string ToString()
 	{
-		return $"[DUR={Duration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
+		var depCount = Dependencies?.Any() == true ? Dependencies.Count().ToString() : "0";
+		return $"[DUR={Duration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()} DEPS={depCount}]";
 	}
 
 	/// <summary>
@@ -910,6 +919,30 @@ public sealed class FusionCacheEntryOptions
 		return this;
 	}
 
+	/// <summary>
+	/// Set the <see cref="Dependencies"/> for this cache entry. When any of the specified dependency keys are modified or removed,
+	/// this entry will be automatically invalidated.
+	/// </summary>
+	/// <param name="dependencies">The cache keys that this entry depends on.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetDependencies(params string[] dependencies)
+	{
+		Dependencies = dependencies;
+		return this;
+	}
+
+	/// <summary>
+	/// Set the <see cref="Dependencies"/> for this cache entry. When any of the specified dependency keys are modified or removed,
+	/// this entry will be automatically invalidated.
+	/// </summary>
+	/// <param name="dependencies">The cache keys that this entry depends on.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetDependencies(IEnumerable<string> dependencies)
+	{
+		Dependencies = dependencies;
+		return this;
+	}
+
 	internal DateTimeOffset GetMemoryAbsoluteExpiration(out bool incoherentFailSafeMaxDuration)
 	{
 		// PHYSICAL DURATION
@@ -1126,7 +1159,8 @@ public sealed class FusionCacheEntryOptions
 			SkipMemoryCacheRead = SkipMemoryCacheRead,
 			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
 
-			EnableAutoClone = EnableAutoClone
+			EnableAutoClone = EnableAutoClone,
+			Dependencies = Dependencies?.ToArray()
 		};
 	}
 

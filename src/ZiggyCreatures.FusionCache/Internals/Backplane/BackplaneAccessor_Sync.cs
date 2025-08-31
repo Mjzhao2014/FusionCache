@@ -177,6 +177,16 @@ internal partial class BackplaneAccessor
 		return Publish(operationId, message, options, isAutoRecovery, isBackground, token);
 	}
 
+	public bool PublishDependencyChanged(string operationId, string key, long timestamp, FusionCacheEntryOptions options, bool isAutoRecovery, bool isBackground, CancellationToken token)
+	{
+		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
+			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] publishing dependency changed", _options.CacheName, _options.InstanceId, operationId, key);
+
+		var message = BackplaneMessage.CreateForDependencyChanged(_cache.InstanceId, key, timestamp);
+
+		return Publish(operationId, message, options, isAutoRecovery, isBackground, token);
+	}
+
 	private void HandleConnect(BackplaneConnectionInfo info)
 	{
 		var operationId = FusionCacheInternalUtils.MaybeGenerateOperationId(_logger);
@@ -303,6 +313,13 @@ internal partial class BackplaneAccessor
 				// HANDLE EXPIRE
 				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
 				break;
+			case BackplaneMessageAction.DependencyChanged:
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification has been received from remote cache {RemoteCacheInstanceId} (DEPENDENCY_CHANGED)", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
+
+				// HANDLE DEPENDENCY CHANGE
+				HandleIncomingDependencyChanged(operationId, message);
+				break;
 			default:
 				// HANDLE UNKNOWN: DO NOTHING
 				if (_logger?.IsEnabled(_options.BackplaneErrorsLogLevel) ?? false)
@@ -423,5 +440,35 @@ internal partial class BackplaneAccessor
 		}
 
 		_cache.SetTagDataInternal(message.CacheKey.Substring(_cache.TagInternalCacheKeyPrefix.Length), message.Timestamp, _options.TagsDefaultEntryOptions.Duplicate().SetSkipDistributedCacheWrite(true, true), default);
+	}
+
+	private void HandleIncomingDependencyChanged(string operationId, BackplaneMessage message)
+	{
+		if (_logger?.IsEnabled(LogLevel.Information) ?? false)
+		{
+			_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification for a DEPENDENCY CHANGED has been received from remote cache {RemoteCacheInstanceId}", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
+		}
+
+		// Process dependency change without sending additional backplane notifications 
+		// (to avoid infinite loops in a multi-node scenario)
+		var dependents = _cache._dependencyTracker.GetDependents(message.CacheKey!);
+		if (dependents == null || dependents.Count == 0)
+			return;
+
+		foreach (var dependentKey in dependents)
+		{
+			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={DependencyKey}): [BP] invalidating dependent key {DependentKey} from remote dependency change", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, dependentKey);
+
+			try
+			{
+				_cache.ExpireMemoryEntryInternal(operationId, dependentKey, message.Timestamp);
+			}
+			catch (Exception exc)
+			{
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={DependencyKey}): [BP] error while invalidating dependent key {DependentKey} from remote dependency change", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, dependentKey);
+			}
+		}
 	}
 }

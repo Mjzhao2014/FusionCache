@@ -65,6 +65,7 @@ public class BackplaneMessage
 			case BackplaneMessageAction.EntrySet:
 			case BackplaneMessageAction.EntryRemove:
 			case BackplaneMessageAction.EntryExpire:
+			case BackplaneMessageAction.DependencyChanged:
 				if (string.IsNullOrEmpty(CacheKey))
 					return false;
 				return true;
@@ -130,6 +131,26 @@ public class BackplaneMessage
 			SourceId = sourceId,
 			Action = BackplaneMessageAction.EntryExpire,
 			CacheKey = cacheKey
+		};
+	}
+
+	/// <summary>
+	/// Creates a message for a dependency change notification.
+	/// </summary>
+	/// <param name="sourceId">The cache InstanceId of the source.</param>
+	/// <param name="dependencyKey">The dependency key that changed.</param>
+	/// <param name="timestamp">The timestamp.</param>
+	/// <returns>The message.</returns>
+	public static BackplaneMessage CreateForDependencyChanged(string sourceId, string dependencyKey, long timestamp)
+	{
+		if (string.IsNullOrEmpty(dependencyKey))
+			throw new ArgumentException("The dependency key cannot be null or empty", nameof(dependencyKey));
+
+		return new BackplaneMessage(timestamp)
+		{
+			SourceId = sourceId,
+			Action = BackplaneMessageAction.DependencyChanged,
+			CacheKey = dependencyKey
 		};
 	}
 
