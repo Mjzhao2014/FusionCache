@@ -65,6 +65,8 @@ public class BackplaneMessage
 			case BackplaneMessageAction.EntrySet:
 			case BackplaneMessageAction.EntryRemove:
 			case BackplaneMessageAction.EntryExpire:
+			case BackplaneMessageAction.CascadeInvalidateByKey:
+			case BackplaneMessageAction.CascadeInvalidateByTag:
 				if (string.IsNullOrEmpty(CacheKey))
 					return false;
 				return true;
@@ -130,6 +132,46 @@ public class BackplaneMessage
 			SourceId = sourceId,
 			Action = BackplaneMessageAction.EntryExpire,
 			CacheKey = cacheKey
+		};
+	}
+
+	/// <summary>
+	/// Creates a message for cascade invalidation by key.
+	/// </summary>
+	/// <param name="sourceId">The cache InstanceId of the source.</param>
+	/// <param name="parentKey">The parent key that triggered the cascade.</param>
+	/// <param name="timestamp">The timestamp.</param>
+	/// <returns>The message.</returns>
+	public static BackplaneMessage CreateForCascadeInvalidateByKey(string sourceId, string parentKey, long timestamp)
+	{
+		if (string.IsNullOrEmpty(parentKey))
+			throw new ArgumentException("The parent key cannot be null or empty", nameof(parentKey));
+
+		return new BackplaneMessage(timestamp)
+		{
+			SourceId = sourceId,
+			Action = BackplaneMessageAction.CascadeInvalidateByKey,
+			CacheKey = parentKey
+		};
+	}
+
+	/// <summary>
+	/// Creates a message for cascade invalidation by tag.
+	/// </summary>
+	/// <param name="sourceId">The cache InstanceId of the source.</param>
+	/// <param name="parentTag">The parent tag that triggered the cascade.</param>
+	/// <param name="timestamp">The timestamp.</param>
+	/// <returns>The message.</returns>
+	public static BackplaneMessage CreateForCascadeInvalidateByTag(string sourceId, string parentTag, long timestamp)
+	{
+		if (string.IsNullOrEmpty(parentTag))
+			throw new ArgumentException("The parent tag cannot be null or empty", nameof(parentTag));
+
+		return new BackplaneMessage(timestamp)
+		{
+			SourceId = sourceId,
+			Action = BackplaneMessageAction.CascadeInvalidateByTag,
+			CacheKey = parentTag
 		};
 	}
 

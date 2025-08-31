@@ -722,6 +722,15 @@ public partial class FusionCache
 				await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
 			}
 
+			// REGISTER DEPENDENCIES
+			if (options.Dependencies?.HasDependencies == true)
+			{
+				_dependencyTracker.RegisterDependencies(key, options.Dependencies);
+			}
+
+			// CASCADE INVALIDATION - trigger for children dependent on this key
+			await _cascadeInvalidator.CascadeInvalidateByKeyAsync(key, operationId, token).ConfigureAwait(false);
+
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -756,6 +765,10 @@ public partial class FusionCache
 			{
 				await DistributedRemoveEntryAsync(operationId, key, options, token).ConfigureAwait(false);
 			}
+
+			// REMOVE DEPENDENCIES AND CASCADE
+			_dependencyTracker.RemoveDependencies(key);
+			await _cascadeInvalidator.CascadeInvalidateByKeyAsync(key, operationId, token).ConfigureAwait(false);
 
 			// EVENT
 			_events.OnRemove(operationId, key);
@@ -992,6 +1005,9 @@ public partial class FusionCache
 			}
 
 			await SetTagDataInternalAsync(tag, FusionCacheInternalUtils.GetCurrentTimestamp(), options, token).ConfigureAwait(false);
+
+			// CASCADE INVALIDATION - trigger for children dependent on this tag
+			await _cascadeInvalidator.CascadeInvalidateByTagsAsync(new[] { tag }, operationId, token).ConfigureAwait(false);
 
 			// EVENT
 			_events.OnRemoveByTag(operationId, tag);

@@ -177,6 +177,26 @@ internal partial class BackplaneAccessor
 		return PublishAsync(operationId, message, options, isAutoRecovery, isBackground, token);
 	}
 
+	public ValueTask<bool> PublishCascadeInvalidateByKeyAsync(string operationId, string parentKey, long timestamp, FusionCacheEntryOptions options, bool isAutoRecovery, bool isBackground, CancellationToken token)
+	{
+		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
+			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] publishing cascade invalidate by key", _options.CacheName, _options.InstanceId, operationId, parentKey);
+
+		var message = BackplaneMessage.CreateForCascadeInvalidateByKey(_cache.InstanceId, parentKey, timestamp);
+
+		return PublishAsync(operationId, message, options, isAutoRecovery, isBackground, token);
+	}
+
+	public ValueTask<bool> PublishCascadeInvalidateByTagAsync(string operationId, string parentTag, long timestamp, FusionCacheEntryOptions options, bool isAutoRecovery, bool isBackground, CancellationToken token)
+	{
+		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
+			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] publishing cascade invalidate by tag", _options.CacheName, _options.InstanceId, operationId, parentTag);
+
+		var message = BackplaneMessage.CreateForCascadeInvalidateByTag(_cache.InstanceId, parentTag, timestamp);
+
+		return PublishAsync(operationId, message, options, isAutoRecovery, isBackground, token);
+	}
+
 	private async ValueTask HandleConnectAsync(BackplaneConnectionInfo info)
 	{
 		var operationId = FusionCacheInternalUtils.MaybeGenerateOperationId(_logger);
@@ -302,6 +322,20 @@ internal partial class BackplaneAccessor
 
 				// HANDLE EXPIRE
 				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
+				break;
+			case BackplaneMessageAction.CascadeInvalidateByKey:
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification has been received from remote cache {RemoteCacheInstanceId} (CASCADE INVALIDATE BY KEY)", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
+
+				// HANDLE CASCADE INVALIDATE BY KEY
+				_cache.CascadeInvalidateByKeyInternal(operationId, message.CacheKey!);
+				break;
+			case BackplaneMessageAction.CascadeInvalidateByTag:
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification has been received from remote cache {RemoteCacheInstanceId} (CASCADE INVALIDATE BY TAG)", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
+
+				// HANDLE CASCADE INVALIDATE BY TAG
+				_cache.CascadeInvalidateByTagInternal(operationId, message.CacheKey!);
 				break;
 			default:
 				// HANDLE UNKNOWN: DO NOTHING

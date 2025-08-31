@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using ZiggyCreatures.Caching.Fusion.Dependencies;
 using ZiggyCreatures.Caching.Fusion.Events;
 using ZiggyCreatures.Caching.Fusion.Internals;
 using ZiggyCreatures.Caching.Fusion.Internals.Memory;
@@ -449,6 +450,11 @@ public sealed class FusionCacheEntryOptions
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 	/// </summary>
 	public bool EnableAutoClone { get; set; }
+
+	/// <summary>
+	/// The dependency information for this cache entry. When any of the parent keys or tags change, this entry will be automatically invalidated.
+	/// </summary>
+	public DependencyInfo? Dependencies { get; set; }
 
 	internal bool IsSafeForAdaptiveCaching { get; set; }
 
@@ -1126,7 +1132,8 @@ public sealed class FusionCacheEntryOptions
 			SkipMemoryCacheRead = SkipMemoryCacheRead,
 			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
 
-			EnableAutoClone = EnableAutoClone
+			EnableAutoClone = EnableAutoClone,
+			Dependencies = Dependencies
 		};
 	}
 

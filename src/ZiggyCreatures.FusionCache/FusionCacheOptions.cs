@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ZiggyCreatures.Caching.Fusion.Dependencies;
 
 namespace ZiggyCreatures.Caching.Fusion;
 
@@ -114,6 +115,9 @@ public class FusionCacheOptions
 		PluginsInfoLogLevel = LogLevel.Information;
 		PluginsErrorsLogLevel = LogLevel.Error;
 		MissingCacheKeyPrefixWarningLogLevel = LogLevel.Warning;
+
+		// CASCADE OPTIONS
+		Cascade = new CascadeOptions();
 	}
 
 	/// <summary>
@@ -186,6 +190,11 @@ public class FusionCacheOptions
 			_tagsDefaultEntryOptions = value;
 		}
 	}
+
+	/// <summary>
+	/// Options for controlling cascade invalidation behavior when using dependencies.
+	/// </summary>
+	public CascadeOptions Cascade { get; }
 
 	/// <summary>
 	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.

@@ -16,6 +16,7 @@ using ZiggyCreatures.Caching.Fusion.Internals.Memory;
 using ZiggyCreatures.Caching.Fusion.Locking;
 using ZiggyCreatures.Caching.Fusion.Plugins;
 using ZiggyCreatures.Caching.Fusion.Serialization;
+using ZiggyCreatures.Caching.Fusion.Internals.Dependencies;
 
 namespace ZiggyCreatures.Caching.Fusion;
 
@@ -61,6 +62,10 @@ public sealed partial class FusionCache
 	// TAGGING
 	private readonly FusionCacheEntryOptions _tagsDefaultEntryOptions;
 	private readonly FusionCacheEntryOptions _cascadeRemoveByTagEntryOptions;
+
+	// DEPENDENCIES
+	private readonly DependencyTracker _dependencyTracker;
+	private readonly CascadeInvalidator _cascadeInvalidator;
 
 	internal readonly string TagInternalCacheKeyPrefix;
 
@@ -193,6 +198,10 @@ public sealed partial class FusionCache
 			if (_logger?.IsEnabled(_options.MissingCacheKeyPrefixWarningLogLevel) ?? false)
 				_logger.Log(_options.MissingCacheKeyPrefixWarningLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}]: a named cache is being used, and no CacheKeyPrefix has been specified. It's usually better to specify a prefix to automatically avoid cache key collisions. If collisions are already avoided when manually creating the cache keys, you can change the MissingCacheKeyPrefixWarningLogLevel option.", CacheName, InstanceId);
 		}
+
+		// DEPENDENCY TRACKER
+		_dependencyTracker = new DependencyTracker(_logger, CacheName, InstanceId);
+		_cascadeInvalidator = new CascadeInvalidator(this, _dependencyTracker, _options.Cascade, _logger, CacheName, InstanceId);
 
 		// MICRO OPTIMIZATION: WARM UP OBSERVABILITY STUFF
 		_ = Activities.Source;
@@ -626,6 +635,24 @@ public sealed partial class FusionCache
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling ExpireMemoryEntryInternal (timestampThreshold={TimestampThreshold})", CacheName, InstanceId, operationId, key, timestampThreshold);
 
 		_mca.ExpireEntry(operationId, key, timestampThreshold);
+	}
+
+	internal void CascadeInvalidateByKeyInternal(string operationId, string parentKey)
+	{
+		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
+			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): calling CascadeInvalidateByKeyInternal for parent key {ParentKey}", CacheName, InstanceId, operationId, parentKey);
+
+		// Don't send backplane message when called from backplane to avoid infinite loops
+		_cascadeInvalidator.CascadeInvalidateByKey(parentKey, operationId, default, sendBackplaneMessage: false);
+	}
+
+	internal void CascadeInvalidateByTagInternal(string operationId, string parentTag)
+	{
+		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
+			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): calling CascadeInvalidateByTagInternal for parent tag {ParentTag}", CacheName, InstanceId, operationId, parentTag);
+
+		// Don't send backplane message when called from backplane to avoid infinite loops
+		_cascadeInvalidator.CascadeInvalidateByTags(new[] { parentTag }, operationId, default, sendBackplaneMessage: false);
 	}
 
 	// TAGGING

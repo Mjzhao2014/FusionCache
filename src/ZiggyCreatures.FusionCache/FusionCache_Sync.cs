@@ -722,6 +722,15 @@ public partial class FusionCache
 				DistributedSetEntry<TValue>(operationId, key, entry, options, token);
 			}
 
+			// REGISTER DEPENDENCIES
+			if (options.Dependencies?.HasDependencies == true)
+			{
+				_dependencyTracker.RegisterDependencies(key, options.Dependencies);
+			}
+
+			// CASCADE INVALIDATION - trigger for children dependent on this key
+			_cascadeInvalidator.CascadeInvalidateByKey(key, operationId, token);
+
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -756,6 +765,10 @@ public partial class FusionCache
 			{
 				DistributedRemoveEntry(operationId, key, options, token);
 			}
+
+			// REMOVE DEPENDENCIES AND CASCADE
+			_dependencyTracker.RemoveDependencies(key);
+			_cascadeInvalidator.CascadeInvalidateByKey(key, operationId, token);
 
 			// EVENT
 			_events.OnRemove(operationId, key);
@@ -992,6 +1005,9 @@ public partial class FusionCache
 			}
 
 			SetTagDataInternal(tag, FusionCacheInternalUtils.GetCurrentTimestamp(), options, token);
+
+			// CASCADE INVALIDATION - trigger for children dependent on this tag
+			_cascadeInvalidator.CascadeInvalidateByTags(new[] { tag }, operationId, token);
 
 			// EVENT
 			_events.OnRemoveByTag(operationId, tag);
