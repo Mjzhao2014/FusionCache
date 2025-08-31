@@ -44,31 +44,6 @@ public class DependencyTests : AbstractTests
 	}
 
 	[Fact]
-	public void BasicTagDependency_InvalidatesChildWhenTaggedEntryChanges()
-	{
-		using var cache = new FusionCache(new FusionCacheOptions());
-
-		// Set parent value with tag
-		cache.Set("product:42", "product-data", tags: new[] { "category:electronics" });
-
-		// Set child with dependency on tag
-		cache.Set("category:electronics:top-products", "top-products-list", options => options
-			.SetDuration(TimeSpan.FromMinutes(10))
-			.WithDependencies(DependsOn.Tags("category:electronics")));
-
-		// Verify both exist
-		Assert.Equal("product-data", cache.GetOrDefault<string>("product:42"));
-		Assert.Equal("top-products-list", cache.GetOrDefault<string>("category:electronics:top-products"));
-
-		// Update product with same tag (this should invalidate dependent entries)
-		cache.Set("product:42", "new-product-data", tags: new[] { "category:electronics" });
-
-		// Parent should have new value, child should be gone
-		Assert.Equal("new-product-data", cache.GetOrDefault<string>("product:42"));
-		Assert.Null(cache.GetOrDefault<string>("category:electronics:top-products"));
-	}
-
-	[Fact]
 	public void MultipleDependencies_InvalidatesOnAnyParentChange()
 	{
 		using var cache = new FusionCache(new FusionCacheOptions());
@@ -76,12 +51,11 @@ public class DependencyTests : AbstractTests
 		// Set multiple parents
 		cache.Set("parent:1", "value1");
 		cache.Set("parent:2", "value2");
-		cache.Set("tagged-item", "tagged-value", tags: new[] { "important" });
 
 		// Set child depending on multiple parents
 		cache.Set("child:complex", "complex-child", options => options
 			.SetDuration(TimeSpan.FromMinutes(10))
-			.WithDependencies(DependsOn.Keys("parent:1", "parent:2").Tags("important")));
+			.WithDependencies(DependsOn.Keys("parent:1", "parent:2")));
 
 		// Verify child exists
 		Assert.Equal("complex-child", cache.GetOrDefault<string>("child:complex"));
@@ -93,7 +67,7 @@ public class DependencyTests : AbstractTests
 		// Re-add child
 		cache.Set("child:complex", "complex-child", options => options
 			.SetDuration(TimeSpan.FromMinutes(10))
-			.WithDependencies(DependsOn.Keys("parent:1", "parent:2").Tags("important")));
+			.WithDependencies(DependsOn.Keys("parent:1", "parent:2")));
 
 		// Update second parent - should invalidate child again
 		cache.Set("parent:2", "new-value2");
@@ -102,11 +76,8 @@ public class DependencyTests : AbstractTests
 		// Re-add child one more time
 		cache.Set("child:complex", "complex-child", options => options
 			.SetDuration(TimeSpan.FromMinutes(10))
-			.WithDependencies(DependsOn.Keys("parent:1", "parent:2").Tags("important")));
+			.WithDependencies(DependsOn.Keys("parent:1", "parent:2")));
 
-		// Clear by tag - should invalidate child
-		cache.RemoveByTag("important");
-		Assert.Null(cache.GetOrDefault<string>("child:complex"));
 	}
 
 	[Fact]
@@ -452,11 +423,9 @@ public class DependencyTests : AbstractTests
 	{
 		// Should handle null arrays gracefully
 		var builder1 = DependsOn.Keys(null!);
-		var builder2 = DependsOn.Tags(null!);
 
 		// Should handle empty arrays
 		var builder3 = DependsOn.Keys();
-		var builder4 = DependsOn.Tags();
 
 		// All should work without throwing exceptions
 		Assert.NotNull(builder1);
