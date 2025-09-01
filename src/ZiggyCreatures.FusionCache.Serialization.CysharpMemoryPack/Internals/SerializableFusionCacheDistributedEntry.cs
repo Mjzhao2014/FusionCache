@@ -28,7 +28,9 @@ internal partial class SerializableFusionCacheDistributedEntry<TValue>
 	[MemoryPackConstructor]
 	SerializableFusionCacheDistributedEntry(TValue value, long timestamp, long logicalExpirationTimestamp, string[]? tags, FusionCacheEntryMetadata? metadata)
 	{
-		this.Entry = new FusionCacheDistributedEntry<TValue>(value, timestamp, logicalExpirationTimestamp, tags, metadata);
+		// Cysharp MemoryPack serializer does not currently propagate dependency information.
+		// Construct distributed entry with null dependencies.
+		this.Entry = new FusionCacheDistributedEntry<TValue>(value, timestamp, logicalExpirationTimestamp, tags, null, null, metadata);
 	}
 
 	public SerializableFusionCacheDistributedEntry(FusionCacheDistributedEntry<TValue>? entry)

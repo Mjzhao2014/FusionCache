@@ -18,6 +18,7 @@ public class FusionCacheOptions
 	private string _cacheName;
 	private FusionCacheEntryOptions _defaultEntryOptions;
 	private FusionCacheEntryOptions _tagsDefaultEntryOptions;
+	private readonly CascadeOptions _cascadeOptions = new();
 
 	/// <summary>
 	/// The default value for <see cref="IFusionCache.CacheName"/>.
@@ -186,6 +187,11 @@ public class FusionCacheOptions
 			_tagsDefaultEntryOptions = value;
 		}
 	}
+
+	/// <summary>
+	/// Options controlling cascade behaviour when invalidating dependent entries.
+	/// </summary>
+	public CascadeOptions Cascade => _cascadeOptions;
 
 	/// <summary>
 	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.

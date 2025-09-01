@@ -18,12 +18,14 @@ public sealed class FusionCacheDistributedEntry<TValue>
 	/// <param name="logicalExpirationTimestamp">The logical expiration of the entry</param>
 	/// <param name="tags">The optional set of tags related to the entry: this may be used to remove/expire multiple entries at once, by tag.</param>
 	/// <param name="metadata">The metadata for the entry.</param>
-	public FusionCacheDistributedEntry(TValue value, long timestamp, long logicalExpirationTimestamp, string[]? tags, FusionCacheEntryMetadata? metadata)
+	public FusionCacheDistributedEntry(TValue value, long timestamp, long logicalExpirationTimestamp, string[]? tags, string[]? dependencyKeys, string[]? dependencyTags, FusionCacheEntryMetadata? metadata)
 	{
 		Value = value;
 		Timestamp = timestamp;
 		LogicalExpirationTimestamp = logicalExpirationTimestamp;
 		Tags = tags;
+		DependencyKeys = dependencyKeys;
+		DependencyTags = dependencyTags;
 		Metadata = metadata;
 	}
 
@@ -55,6 +57,12 @@ public sealed class FusionCacheDistributedEntry<TValue>
 	[DataMember(Name = "x", EmitDefaultValue = false)]
 	public string[]? Tags { get; set; }
 
+	[DataMember(Name = "dpk", EmitDefaultValue = false)]
+	public string[]? DependencyKeys { get; set; }
+
+	[DataMember(Name = "dpt", EmitDefaultValue = false)]
+	public string[]? DependencyTags { get; set; }
+
 	/// <inheritdoc/>
 	[DataMember(Name = "m", EmitDefaultValue = false)]
 	public FusionCacheEntryMetadata? Metadata { get; set; }
@@ -77,7 +85,7 @@ public sealed class FusionCacheDistributedEntry<TValue>
 		return FusionCacheInternalUtils.ToLogString(this, false) ?? "";
 	}
 
-	internal static FusionCacheDistributedEntry<TValue> CreateFromOptions(TValue value, long timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
+	internal static FusionCacheDistributedEntry<TValue> CreateFromOptions(TValue value, long timestamp, string[]? tags, string[]? dependencyKeys, string[]? dependencyTags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
 		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false);
 
@@ -94,6 +102,8 @@ public sealed class FusionCacheDistributedEntry<TValue>
 			timestamp,
 			exp,
 			tags,
+			dependencyKeys,
+			dependencyTags,
 			metadata
 		);
 	}
@@ -123,6 +133,8 @@ public sealed class FusionCacheDistributedEntry<TValue>
 			entry.Timestamp,
 			exp,
 			entry.Tags,
+			entry.DependencyKeys,
+			entry.DependencyTags,
 			metadata
 		);
 	}

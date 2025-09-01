@@ -139,6 +139,18 @@ public sealed class FusionCacheEntryOptions
 	public CacheItemPriority Priority { get; set; }
 
 	/// <summary>
+	/// Optional list of parent cache keys this entry depends upon.
+	/// When any parent is invalidated, this entry will be cascaded accordingly.
+	/// </summary>
+	public string[]? DependencyKeys { get; set; }
+
+	/// <summary>
+	/// Optional list of parent tags this entry depends upon.
+	/// When any parent tag is removed/updated, this entry will be cascaded accordingly.
+	/// </summary>
+	public string[]? DependencyTags { get; set; }
+
+	/// <summary>
 	/// Returns a stale (expired) value even in read-only operations (eg: TryGet/GetOrDefault).
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/FailSafe.md"/>

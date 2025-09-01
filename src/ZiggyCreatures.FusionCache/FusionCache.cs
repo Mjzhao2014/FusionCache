@@ -329,7 +329,7 @@ public sealed partial class FusionCache
 				_logger.Log(_options.FailSafeActivationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): FAIL-SAFE activated (from distributed)", CacheName, InstanceId, operationId, key);
 
 			//entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry, options);
-			entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(distributedEntry.GetValue<TValue>(), distributedEntry.Timestamp, distributedEntry.Tags, options, true, distributedEntry.Metadata?.LastModifiedTimestamp, distributedEntry.Metadata?.ETag);
+				entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(distributedEntry.GetValue<TValue>(), distributedEntry.Timestamp, distributedEntry.Tags, options.DependencyKeys, options.DependencyTags, options, true, distributedEntry.Metadata?.LastModifiedTimestamp, distributedEntry.Metadata?.ETag);
 		}
 		else if (memoryEntry is not null && memoryEntry.Metadata is not null)
 		{
@@ -353,7 +353,7 @@ public sealed partial class FusionCache
 			if (_logger?.IsEnabled(_options.FailSafeActivationLogLevel) ?? false)
 				_logger.Log(_options.FailSafeActivationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): FAIL-SAFE activated (from fail-safe default value)", CacheName, InstanceId, operationId, key);
 
-			entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(failSafeDefaultValue.Value, null, null, options, true, null, null);
+			entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(failSafeDefaultValue.Value, null, null, options.DependencyKeys, options.DependencyTags, options, true, null, null);
 		}
 
 		if (entry is not null)
@@ -483,7 +483,7 @@ public sealed partial class FusionCache
 					options.ReThrowBackplaneExceptions = false;
 
 					// ADAPTIVE CACHING UPDATE
-					var lateEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(antecedent.GetAwaiter().GetResult(), null, ctx.Tags, options, false, ctx.LastModified?.UtcTicks, ctx.ETag);
+						var lateEntry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(antecedent.GetAwaiter().GetResult(), null, ctx.Tags, options.DependencyKeys, options.DependencyTags, options, false, ctx.LastModified?.UtcTicks, ctx.ETag);
 
 					if (_mca.ShouldWrite(options))
 					{

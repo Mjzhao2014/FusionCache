@@ -219,7 +219,7 @@ public partial class FusionCache
 					var value = await factory(null!, token).ConfigureAwait(false);
 					hasNewValue = true;
 
-					entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tags, options, isStale, null, null);
+					entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tags, options.DependencyKeys, options.DependencyTags, options, isStale, null, null);
 				}
 				else
 				{
@@ -282,7 +282,7 @@ public partial class FusionCache
 
 							UpdateAdaptiveOptions(ctx, ref options);
 
-							entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, ctx.Tags, options, isStale, ctx.LastModified?.UtcTicks, ctx.ETag);
+							entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, ctx.Tags, options.DependencyKeys, options.DependencyTags, options, isStale, ctx.LastModified?.UtcTicks, ctx.ETag);
 
 							// EVENTS
 							_events.OnFactorySuccess(operationId, key);
@@ -710,7 +710,7 @@ public partial class FusionCache
 		try
 		{
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
-			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
+			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options.DependencyKeys, options.DependencyTags, options, false, null, null);
 
 			if (_mca.ShouldWrite(options))
 			{

@@ -9,12 +9,14 @@ namespace ZiggyCreatures.Caching.Fusion.Internals.Memory;
 internal sealed class FusionCacheMemoryEntry<TValue>
 	: IFusionCacheMemoryEntry
 {
-	private FusionCacheMemoryEntry(object? value, long timestamp, long logicalExpirationTimestamp, string[]? tags, FusionCacheEntryMetadata? metadata)
+	private FusionCacheMemoryEntry(object? value, long timestamp, long logicalExpirationTimestamp, string[]? tags, string[]? dependencyKeys, string[]? dependencyTags, FusionCacheEntryMetadata? metadata)
 	{
 		Value = value;
 		Timestamp = timestamp;
 		LogicalExpirationTimestamp = logicalExpirationTimestamp;
 		Tags = tags;
+		DependencyKeys = dependencyKeys;
+		DependencyTags = dependencyTags;
 		Metadata = metadata;
 	}
 
@@ -42,6 +44,10 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 	public long LogicalExpirationTimestamp { get; set; }
 
 	public string[]? Tags { get; set; }
+
+	public string[]? DependencyKeys { get; set; }
+
+	public string[]? DependencyTags { get; set; }
 
 	public FusionCacheEntryMetadata? Metadata { get; private set; }
 
@@ -77,7 +83,7 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 		return FusionCacheInternalUtils.ToLogString(this, false) ?? "";
 	}
 
-	public static FusionCacheMemoryEntry<TValue> CreateFromOptions(object? value, long? timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
+	public static FusionCacheMemoryEntry<TValue> CreateFromOptions(object? value, long? timestamp, string[]? tags, string[]? dependencyKeys, string[]? dependencyTags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
 		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.Duration, options, isStale == false);
 
@@ -94,6 +100,8 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 			timestamp ?? FusionCacheInternalUtils.GetCurrentTimestamp(),
 			exp,
 			tags,
+			dependencyKeys,
+			dependencyTags,
 			metadata
 		);
 	}
@@ -121,6 +129,8 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 			entry.Timestamp,
 			entry.LogicalExpirationTimestamp,
 			entry.Tags,
+			entry.DependencyKeys,
+			entry.DependencyTags,
 			metadata
 		);
 	}
@@ -129,6 +139,8 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 	{
 		Value = distributedEntry.Value;
 		Tags = distributedEntry.Tags;
+		DependencyKeys = distributedEntry.DependencyKeys;
+		DependencyTags = distributedEntry.DependencyTags;
 		Timestamp = distributedEntry.Timestamp;
 		LogicalExpirationTimestamp = distributedEntry.LogicalExpirationTimestamp;
 		Metadata = distributedEntry.Metadata;

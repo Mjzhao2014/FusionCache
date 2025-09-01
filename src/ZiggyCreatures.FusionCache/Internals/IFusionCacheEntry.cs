@@ -46,6 +46,16 @@ internal interface IFusionCacheEntry
 	string[]? Tags { get; set; }
 
 	/// <summary>
+	/// Optional set of parent cache keys this entry depends on. When any parent changes, this entry should be invalidated.
+	/// </summary>
+	string[]? DependencyKeys { get; set; }
+
+	/// <summary>
+	/// Optional set of parent tags this entry depends on. When any parent tag changes, this entry should be invalidated.
+	/// </summary>
+	string[]? DependencyTags { get; set; }
+
+	/// <summary>
 	/// Metadata about the cache entry.
 	/// </summary>
 	FusionCacheEntryMetadata? Metadata { get; }

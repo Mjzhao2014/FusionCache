@@ -59,7 +59,7 @@ public partial class SerializationTests
 	{
 		var serializer = TestsUtils.GetSerializer(serializerType);
 		var now = DateTimeOffset.UtcNow;
-		var obj = new FusionCacheDistributedEntry<string>(SampleString, now.UtcTicks, now.AddSeconds(10).UtcTicks, [], new FusionCacheEntryMetadata(true, now.AddSeconds(9).UtcTicks, "abc123", now.UtcTicks, 123, 1));
+		var obj = new FusionCacheDistributedEntry<string>(SampleString, now.UtcTicks, now.AddSeconds(10).UtcTicks, [], null, null, new FusionCacheEntryMetadata(true, now.AddSeconds(9).UtcTicks, "abc123", now.UtcTicks, 123, 1));
 
 		var data = serializer.Serialize(obj);
 
@@ -85,7 +85,7 @@ public partial class SerializationTests
 	{
 		var serializer = TestsUtils.GetSerializer(serializerType);
 		var now = DateTimeOffset.UtcNow;
-		var obj = new FusionCacheDistributedEntry<string>(SampleString, now.UtcTicks, now.AddSeconds(10).UtcTicks, [], null);
+		var obj = new FusionCacheDistributedEntry<string>(SampleString, now.UtcTicks, now.AddSeconds(10).UtcTicks, [], null, null, null);
 
 		var data = serializer.Serialize(obj);
 
@@ -106,7 +106,7 @@ public partial class SerializationTests
 	{
 		var serializer = TestsUtils.GetSerializer(serializerType);
 		var now = DateTimeOffset.UtcNow;
-		var obj = new FusionCacheDistributedEntry<ComplexType>(ComplexType.CreateSample(), now.UtcTicks, now.AddSeconds(10).AddMicroseconds(now.Nanosecond * -1).UtcTicks, [], new FusionCacheEntryMetadata(true, now.AddSeconds(9).AddMicroseconds(now.Microsecond * -1).UtcTicks, "abc123", now.AddMicroseconds(now.Microsecond * -1).UtcTicks, 123, 1));
+		var obj = new FusionCacheDistributedEntry<ComplexType>(ComplexType.CreateSample(), now.UtcTicks, now.AddSeconds(10).AddMicroseconds(now.Nanosecond * -1).UtcTicks, [], null, null, new FusionCacheEntryMetadata(true, now.AddSeconds(9).AddMicroseconds(now.Microsecond * -1).UtcTicks, "abc123", now.AddMicroseconds(now.Microsecond * -1).UtcTicks, 123, 1));
 
 		var data = serializer.Serialize(obj);
 
@@ -144,6 +144,8 @@ public partial class SerializationTests
 			sourceData,
 			DateTimeOffset.UtcNow.UtcTicks,
 			DateTimeOffset.UtcNow.AddSeconds(10).UtcTicks,
+			null,
+			null,
 			null,
 			null
 		);
