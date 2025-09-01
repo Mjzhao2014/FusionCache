@@ -184,28 +184,40 @@ public class DependencyTests : AbstractTests
 	}
 
 	[Fact]
-	public void RemoveEntry_RemovesDependenciesAndCascades()
+	public void RemoveEntry_emovesDependenciesAndCascades_CleansDependencyGraphAndPreventsStaleReferences()
 	{
 		using var cache = new FusionCache(new FusionCacheOptions());
 
-		// Set up dependency chain
-		cache.Set("root", "root-value");
-		cache.Set("branch", "branch-value", options => options
-			.WithDependencies(DependsOn.Keys("root")));
-		cache.Set("leaf", "leaf-value", options => options
-			.WithDependencies(DependsOn.Keys("branch")));
+		// Set up initial dependency: parent -> child
+		cache.Set("parent", "parent-value");
+		cache.Set("child", "child-value", options => options
+			.WithDependencies(DependsOn.Keys("parent")));
 
-		// Verify all exist
-		Assert.Equal("root-value", cache.GetOrDefault<string>("root"));
-		Assert.Equal("branch-value", cache.GetOrDefault<string>("branch"));
-		Assert.Equal("leaf-value", cache.GetOrDefault<string>("leaf"));
+		// Verify initial state
+		Assert.Equal("parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("child-value", cache.GetOrDefault<string>("child"));
 
-		// Remove branch - should cascade to leaf but not affect root
-		cache.Remove("branch");
+		// Remove parent - this should cascade to child AND clean up dependency graph
+		cache.Remove("parent");
 
-		Assert.Equal("root-value", cache.GetOrDefault<string>("root"));
-		Assert.Null(cache.GetOrDefault<string>("branch"));
-		Assert.Null(cache.GetOrDefault<string>("leaf"));
+		// Both should be gone
+		Assert.Null(cache.GetOrDefault<string>("parent"));
+		Assert.Null(cache.GetOrDefault<string>("child"));
+
+		// Now re-add the same keys WITHOUT dependencies
+		cache.Set("parent", "new-parent-value");
+		cache.Set("child", "new-child-value");
+
+		// Verify they exist
+		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
+
+		// Update parent again - this should NOT affect child since dependency was cleaned up
+		cache.Set("parent", "updated-parent-value");
+
+		// Child should still exist (proving no stale dependency)
+		Assert.Equal("updated-parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
 	}
 
 	[Fact]

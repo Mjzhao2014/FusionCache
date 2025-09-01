@@ -773,6 +773,46 @@ public sealed partial class FusionCache
 		}
 	}
 
+	private void RemoveFromDependencyGraph(string key)
+	{
+		lock (_dependencyLock)
+		{
+			// Remove as a child: remove this key from all its parents' children lists
+			if (_childToParents.TryGetValue(key, out var parents))
+			{
+				foreach (var parent in parents)
+				{
+					if (_parentToChildren.TryGetValue(parent, out var parentChildren))
+					{
+						parentChildren.Remove(key);
+						if (parentChildren.Count == 0)
+						{
+							_parentToChildren.Remove(parent);
+						}
+					}
+				}
+				_childToParents.Remove(key);
+			}
+
+			// Remove as a parent: remove this key from all its children's parents lists
+			if (_parentToChildren.TryGetValue(key, out var children))
+			{
+				foreach (var child in children)
+				{
+					if (_childToParents.TryGetValue(child, out var childParents))
+					{
+						childParents.Remove(key);
+						if (childParents.Count == 0)
+						{
+							_childToParents.Remove(child);
+						}
+					}
+				}
+				_parentToChildren.Remove(key);
+			}
+		}
+	}
+
 	private bool WouldCreateCycle(string startChildKey, string parentKey)
 	{
 		// BFS from child to see if parent already reachable

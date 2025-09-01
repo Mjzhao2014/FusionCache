@@ -773,6 +773,11 @@ public partial class FusionCache
 			{
 				InvalidateDescendants(key);
 			}
+			// Remove the key from the dependency graph to prevent stale entries
+			if (!skipCascade)
+			{
+				RemoveFromDependencyGraph(key);
+			}
 		}
 		catch (Exception exc)
 		{
