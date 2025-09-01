@@ -5,6 +5,7 @@ using ZiggyCreatures.Caching.Fusion.Internals.Backplane;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
 using ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 using ZiggyCreatures.Caching.Fusion.Internals.Memory;
+using System.Collections.Generic;
 
 namespace ZiggyCreatures.Caching.Fusion;
 
@@ -343,10 +344,11 @@ public partial class FusionCache
 					await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
 				}
 			}
-
 			// EVENT
 			_events.OnMiss(operationId, key, activity);
 			_events.OnSet(operationId, key);
+			// DEPENDENCIES
+			await CascadeInvalidateChildrenAsync(operationId, key, options, token).ConfigureAwait(false);
 		}
 		else if (entry is not null)
 		{
@@ -357,6 +359,11 @@ public partial class FusionCache
 		{
 			// EVENT
 			_events.OnMiss(operationId, key, activity);
+		}
+		// Always update dependency edges if specified
+		if (entry is not null && options.Dependencies is not null)
+		{
+			RegisterDependenciesForEntry(key, options);
 		}
 
 		return entry;
@@ -724,6 +731,9 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			// DEPENDENCIES
+			await CascadeInvalidateChildrenAsync(operationId, key, options, token).ConfigureAwait(false);
+			RegisterDependenciesForEntry(key, options);
 		}
 		catch (Exception exc)
 		{
@@ -735,7 +745,7 @@ public partial class FusionCache
 
 	// REMOVE
 
-	private async ValueTask RemoveInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+	private async ValueTask RemoveInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool skipCascade = false)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -759,6 +769,12 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnRemove(operationId, key);
+			// DEPENDENCIES
+			RemoveChildDependencies(key);
+			if (skipCascade == false)
+			{
+				await CascadeInvalidateChildrenAsync(operationId, key, options, token).ConfigureAwait(false);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -780,6 +796,42 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		await RemoveInternalAsync(key, options, token).ConfigureAwait(false);
+	}
+
+	private async ValueTask CascadeInvalidateChildrenAsync(string operationId, string parentKey, FusionCacheEntryOptions baseOptions, CancellationToken token)
+	{
+		var cascadeOptions = _options.Cascade;
+		if (cascadeOptions.MaxCascadeDepth <= 0)
+			return;
+		var visited = new HashSet<string>(StringComparer.Ordinal);
+		visited.Add(parentKey);
+		var stack = new Stack<(string key,int depth)>();
+		stack.Push((parentKey, 0));
+		int removedCount = 0;
+		while (stack.Count > 0)
+		{
+			var (current, depth) = stack.Pop();
+			if (depth >= cascadeOptions.MaxCascadeDepth)
+				continue;
+			if (_dependencies.TryGetValue(current, out var children) == false)
+				continue;
+			foreach (var childKey in children.Keys)
+			{
+				if (removedCount >= cascadeOptions.MaxCascadeFanout)
+					return;
+				if (!visited.Add(childKey))
+					continue;
+				removedCount++;
+				var childOptions = baseOptions;
+				if (cascadeOptions.CascadeToL2 == false)
+				{
+					childOptions = childOptions.Duplicate();
+					childOptions.SkipDistributedCacheWrite = true;
+				}
+				await RemoveInternalAsync(childKey, childOptions, token, skipCascade: true).ConfigureAwait(false);
+				stack.Push((childKey, depth+1));
+			}
+		}
 	}
 
 	// EXPIRE
@@ -808,6 +860,9 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnExpire(operationId, key);
+			// DEPENDENCIES
+			RemoveChildDependencies(key);
+			await CascadeInvalidateChildrenAsync(operationId, key, options, token).ConfigureAwait(false);
 		}
 		catch (Exception exc)
 		{

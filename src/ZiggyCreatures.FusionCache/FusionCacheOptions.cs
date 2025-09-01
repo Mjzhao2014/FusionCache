@@ -527,6 +527,11 @@ public class FusionCacheOptions
 	/// </summary>
 	public LogLevel MissingCacheKeyPrefixWarningLogLevel { get; set; }
 
+	/// <summary>
+	/// Options controlling behavior of dependency cascade invalidations.
+	/// </summary>
+	public CascadeOptions Cascade { get; set; } = new CascadeOptions();
+
 	FusionCacheOptions IOptions<FusionCacheOptions>.Value
 	{
 		get { return this; }
@@ -540,8 +545,8 @@ public class FusionCacheOptions
 	/// <returns>The newly created <see cref="FusionCacheOptions"/> object.</returns>
 	public FusionCacheOptions Duplicate()
 	{
-		var res = new FusionCacheOptions
-		{
+	var res = new FusionCacheOptions
+	{
 			CacheName = CacheName,
 			InstanceId = InstanceId,
 
@@ -596,8 +601,9 @@ public class FusionCacheOptions
 			PluginsErrorsLogLevel = PluginsErrorsLogLevel,
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
-			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
-		};
+		MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+		Cascade = Cascade.Duplicate(),
+	};
 
 		return res;
 	}

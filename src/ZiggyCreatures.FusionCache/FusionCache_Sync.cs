@@ -343,10 +343,11 @@ public partial class FusionCache
 					DistributedSetEntry<TValue>(operationId, key, entry, options, token);
 				}
 			}
-
 			// EVENT
 			_events.OnMiss(operationId, key, activity);
 			_events.OnSet(operationId, key);
+			// Invalidate any children if this key is a parent and its value changed
+			CascadeInvalidateChildren(operationId, key, options, token);
 		}
 		else if (entry is not null)
 		{
@@ -357,6 +358,11 @@ public partial class FusionCache
 		{
 			// EVENT
 			_events.OnMiss(operationId, key, activity);
+		}
+		// Always update dependency edges if specified
+		if (entry is not null && options.Dependencies is not null)
+		{
+			RegisterDependenciesForEntry(key, options);
 		}
 
 		return entry;
@@ -724,6 +730,10 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			// DEPENDENCIES: invalidate any children before adding new edges
+			CascadeInvalidateChildren(operationId, key, options, token);
+			// Update dependency graph for this entry
+			RegisterDependenciesForEntry(key, options);
 		}
 		catch (Exception exc)
 		{
@@ -735,7 +745,7 @@ public partial class FusionCache
 
 	// REMOVE
 
-	private void RemoveInternal(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+	private void RemoveInternal(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool skipCascade = false)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -759,6 +769,12 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnRemove(operationId, key);
+			// DEPENDENCIES: remove any child edges and cascade invalidate children
+			RemoveChildDependencies(key);
+			if (skipCascade == false)
+			{
+				CascadeInvalidateChildren(operationId, key, options, token);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -808,6 +824,9 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnExpire(operationId, key);
+			// DEPENDENCIES: remove any child edges and cascade invalidate children
+			RemoveChildDependencies(key);
+			CascadeInvalidateChildren(operationId, key, options, token);
 		}
 		catch (Exception exc)
 		{

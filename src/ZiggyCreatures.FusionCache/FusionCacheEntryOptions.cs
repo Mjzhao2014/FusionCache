@@ -450,6 +450,13 @@ public sealed class FusionCacheEntryOptions
 	/// </summary>
 	public bool EnableAutoClone { get; set; }
 
+	/// <summary>
+	/// Dependencies that should be associated with the entry when it is saved to the cache.
+	/// If specified, <see cref="DependencyBuilder.Keys"/> will be treated as parent entries of this key, and <see cref="DependencyBuilder.ParentOf"/> will be treated as child entries of this key.
+	/// The dependency graph is updated after any set/get-or-set call using these options.
+	/// </summary>
+	internal DependencyBuilder? Dependencies { get; set; }
+
 	internal bool IsSafeForAdaptiveCaching { get; set; }
 
 	/// <inheritdoc/>
@@ -1123,11 +1130,12 @@ public sealed class FusionCacheEntryOptions
 			SkipDistributedCacheWrite = SkipDistributedCacheWrite,
 			SkipDistributedCacheReadWhenStale = SkipDistributedCacheReadWhenStale,
 
-			SkipMemoryCacheRead = SkipMemoryCacheRead,
-			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
+		SkipMemoryCacheRead = SkipMemoryCacheRead,
+		SkipMemoryCacheWrite = SkipMemoryCacheWrite,
 
-			EnableAutoClone = EnableAutoClone
-		};
+		EnableAutoClone = EnableAutoClone,
+		Dependencies = Dependencies
+	};
 	}
 
 	internal FusionCacheEntryOptions EnsureIsSafeForAdaptiveCaching()

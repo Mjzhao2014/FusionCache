@@ -16,6 +16,7 @@ using ZiggyCreatures.Caching.Fusion.Internals.Memory;
 using ZiggyCreatures.Caching.Fusion.Locking;
 using ZiggyCreatures.Caching.Fusion.Plugins;
 using ZiggyCreatures.Caching.Fusion.Serialization;
+using System.Collections.Generic;
 
 namespace ZiggyCreatures.Caching.Fusion;
 
@@ -61,6 +62,9 @@ public sealed partial class FusionCache
 	// TAGGING
 	private readonly FusionCacheEntryOptions _tagsDefaultEntryOptions;
 	private readonly FusionCacheEntryOptions _cascadeRemoveByTagEntryOptions;
+
+	// DEPENDENCY GRAPH: parent key → set of child keys which depend on it.
+	private readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentDictionary<string, byte>> _dependencies = new();
 
 	internal readonly string TagInternalCacheKeyPrefix;
 
@@ -267,6 +271,89 @@ public sealed partial class FusionCache
 		foreach (var tag in tags)
 		{
 			ValidateTag(tag);
+		}
+	}
+
+	/// <summary>
+	/// Remove any parent→child edges pointing at this key as a child.
+	/// </summary>
+	private void RemoveChildDependencies(string childKey)
+	{
+		foreach (var kvp in _dependencies)
+		{
+			kvp.Value.TryRemove(childKey, out _);
+		}
+	}
+
+	/// <summary>
+	/// Update dependency graph based on any configured dependencies for this entry.
+	/// For children declaring parents, existing parent edges are reset. For parents declaring children, edges are added.
+	/// </summary>
+	private void RegisterDependenciesForEntry(string key, FusionCacheEntryOptions options)
+	{
+		var deps = options.Dependencies;
+		if (deps is null)
+			return;
+		var parentKeys = deps.ParentKeys;
+		if (parentKeys is not null && parentKeys.Length > 0)
+		{
+			// Child scenario: remove any previous parent edges for this child
+			RemoveChildDependencies(key);
+			foreach (var parent in parentKeys)
+			{
+				var p = parent;
+				MaybePreProcessCacheKey(ref p);
+				var children = _dependencies.GetOrAdd(p, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, byte>());
+				children[key] = 0;
+			}
+		}
+		var childKeys = deps.ChildKeys;
+		if (childKeys is not null && childKeys.Length > 0)
+		{
+			// Parent scenario: just add edges
+			var children = _dependencies.GetOrAdd(key, _ => new System.Collections.Concurrent.ConcurrentDictionary<string, byte>());
+			foreach (var child in childKeys)
+			{
+				var c = child;
+				MaybePreProcessCacheKey(ref c);
+				children[c] = 0;
+			}
+		}
+	}
+
+	private void CascadeInvalidateChildren(string operationId, string parentKey, FusionCacheEntryOptions baseOptions, CancellationToken token)
+	{
+		var cascadeOptions = _options.Cascade;
+		if (cascadeOptions.MaxCascadeDepth <= 0)
+			return;
+		var visited = new HashSet<string>(StringComparer.Ordinal);
+		visited.Add(parentKey);
+		var stack = new Stack<(string key,int depth)>();
+		stack.Push((parentKey, 0));
+		int removedCount = 0;
+		while (stack.Count > 0)
+		{
+			var (current, depth) = stack.Pop();
+			if (depth >= cascadeOptions.MaxCascadeDepth)
+				continue;
+			if (_dependencies.TryGetValue(current, out var children) == false)
+				continue;
+			foreach (var childKey in children.Keys)
+			{
+				if (removedCount >= cascadeOptions.MaxCascadeFanout)
+					return;
+				if (!visited.Add(childKey))
+					continue;
+				removedCount++;
+				var childOptions = baseOptions;
+				if (cascadeOptions.CascadeToL2 == false)
+				{
+					childOptions = childOptions.Duplicate();
+					childOptions.SkipDistributedCacheWrite = true;
+				}
+				RemoveInternal(childKey, childOptions, token, skipCascade: true);
+				stack.Push((childKey, depth+1));
+			}
 		}
 	}
 
@@ -616,16 +703,20 @@ public sealed partial class FusionCache
 	{
 		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling RemoveMemoryEntryInternal", CacheName, InstanceId, operationId, key);
-
 		_mca.RemoveEntry(operationId, key);
+		// Dependencies: remove any child edges and cascade invalidate children
+		RemoveChildDependencies(key);
+		CascadeInvalidateChildren(operationId, key, _defaultEntryOptions, CancellationToken.None);
 	}
 
 	internal void ExpireMemoryEntryInternal(string operationId, string key, long? timestampThreshold)
 	{
 		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling ExpireMemoryEntryInternal (timestampThreshold={TimestampThreshold})", CacheName, InstanceId, operationId, key, timestampThreshold);
-
 		_mca.ExpireEntry(operationId, key, timestampThreshold);
+		// Dependencies: remove any child edges and cascade invalidate children
+		RemoveChildDependencies(key);
+		CascadeInvalidateChildren(operationId, key, _defaultEntryOptions, CancellationToken.None);
 	}
 
 	// TAGGING
