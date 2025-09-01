@@ -1,5 +1,8 @@
 ﻿using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -72,6 +75,11 @@ public sealed partial class FusionCache
 	internal const string ClearExpireTag = "*";
 	internal readonly string ClearExpireTagCacheKey;
 	internal readonly string ClearExpireTagInternalCacheKey;
+
+	// DEPENDENCIES
+	private readonly Dictionary<string, HashSet<string>> _childrenByParent = new();
+	private readonly Dictionary<string, HashSet<string>> _parentsByChild = new();
+	private readonly object _dependencyLock = new();
 	internal long ClearExpireTimestamp;
 
 	/// <summary>
@@ -197,6 +205,180 @@ public sealed partial class FusionCache
 		// MICRO OPTIMIZATION: WARM UP OBSERVABILITY STUFF
 		_ = Activities.Source;
 		_ = Metrics.Meter;
+	}
+
+	// DEPENDENCY GRAPH MANAGEMENT
+
+	private void AddDependencyEdge(string parentKey, string childKey)
+	{
+		lock (_dependencyLock)
+		{
+			// check for cycles: ensure parent not reachable from child
+			if (WouldCreateCycle(parentKey, childKey))
+			{
+				throw new FusionCacheDependencyCycleException($"Adding dependency {parentKey}->{childKey} would create a cycle");
+			}
+			if (!_childrenByParent.TryGetValue(parentKey, out var childSet))
+			{
+				childSet = new HashSet<string>();
+				_childrenByParent[parentKey] = childSet;
+			}
+			childSet.Add(childKey);
+			if (!_parentsByChild.TryGetValue(childKey, out var parentSet))
+			{
+				parentSet = new HashSet<string>();
+				_parentsByChild[childKey] = parentSet;
+			}
+			parentSet.Add(parentKey);
+		}
+	}
+
+	private bool WouldCreateCycle(string parentKey, string childKey)
+	{
+		// perform BFS from child up via parents to see if parentKey is reachable
+		var toVisit = new Queue<string>();
+		var visited = new HashSet<string>();
+		toVisit.Enqueue(childKey);
+		int depth = 0;
+		while (toVisit.Count > 0 && depth <= _options.Cascade.MaxCascadeDepth)
+		{
+			var current = toVisit.Dequeue();
+			if (!visited.Add(current))
+				continue;
+			if (_parentsByChild.TryGetValue(current, out var parents))
+			{
+				foreach (var p in parents)
+				{
+					if (p == parentKey)
+						return true;
+					toVisit.Enqueue(p);
+				}
+			}
+			depth++;
+		}
+		return false;
+	}
+
+	private void RemoveChildDependencyEdges(string childKey)
+	{
+		lock (_dependencyLock)
+		{
+			if (_parentsByChild.TryGetValue(childKey, out var parents))
+			{
+				foreach (var p in parents)
+				{
+					if (_childrenByParent.TryGetValue(p, out var children))
+					{
+						children.Remove(childKey);
+						if (children.Count == 0)
+						{
+							_childrenByParent.Remove(p);
+						}
+					}
+				}
+				_parentsByChild.Remove(childKey);
+			}
+		}
+	}
+
+	private void RemoveParentDependencyEdges(string parentKey)
+	{
+		lock (_dependencyLock)
+		{
+			if (_childrenByParent.TryGetValue(parentKey, out var kids))
+			{
+				foreach (var c in kids)
+				{
+					if (_parentsByChild.TryGetValue(c, out var parentSet))
+					{
+						parentSet.Remove(parentKey);
+						if (parentSet.Count == 0)
+						{
+							_parentsByChild.Remove(c);
+						}
+					}
+				}
+				_childrenByParent.Remove(parentKey);
+			}
+		}
+	}
+
+	private void CascadeInvalidateDependencies(string operationId, string parentKey, CancellationToken token)
+	{
+		// BFS over children up to max depth and fanout
+		var maxDepth = _options.Cascade.MaxCascadeDepth;
+		var maxFanout = _options.Cascade.MaxCascadeFanout;
+		var visited = new HashSet<string>();
+		var queue = new Queue<(string key, int depth)>();
+		queue.Enqueue((parentKey, 0));
+		int fanout = 0;
+		while (queue.Count > 0)
+		{
+			var (currentKey, depth) = queue.Dequeue();
+			if (depth > maxDepth)
+				break;
+			lock (_dependencyLock)
+			{
+				if (!_childrenByParent.TryGetValue(currentKey, out var children))
+					continue;
+				foreach (var child in children.ToArray())
+				{
+					if (visited.Contains(child))
+						continue;
+					visited.Add(child);
+					// invalidate child
+					try
+					{
+						var childOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+						childOptions.SkipBackplaneNotifications = true;
+						// Skip L2 if cascade disallowed
+						if (_options.Cascade.CascadeToL2 == false)
+						{
+							childOptions.SkipDistributedCacheWrite = true;
+						}
+						ExpireInternal(child, childOptions, token);
+					}
+					catch
+					{
+						// ignore
+					}
+					fanout++;
+					if (fanout > maxFanout)
+						return;
+					queue.Enqueue((child, depth + 1));
+				}
+			}
+		}
+	}
+
+	private void ApplyEntryDependencies(string operationId, string currentKey, FusionCacheEntryOptions options)
+	{
+		var deps = options.Dependencies;
+		if (deps is null)
+			return;
+		// current key is processed full key already
+		if (deps.ParentKeys.Count > 0)
+		{
+			// remove any existing parent edges for this child
+			RemoveChildDependencyEdges(currentKey);
+			foreach (var parent in deps.ParentKeys)
+			{
+				var p = parent;
+				MaybePreProcessCacheKey(ref p);
+				AddDependencyEdge(p, currentKey);
+			}
+		}
+		if (deps.ChildKeys.Count > 0)
+		{
+			foreach (var child in deps.ChildKeys)
+			{
+				var c = child;
+				MaybePreProcessCacheKey(ref c);
+				AddDependencyEdge(currentKey, c);
+			}
+		}
+		// clear builder to avoid reuse
+		options.Dependencies = null;
 	}
 
 	/// <inheritdoc/>
@@ -618,6 +800,11 @@ public sealed partial class FusionCache
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling RemoveMemoryEntryInternal", CacheName, InstanceId, operationId, key);
 
 		_mca.RemoveEntry(operationId, key);
+		// drop dependency edges where this key participates
+		RemoveChildDependencyEdges(key);
+		RemoveParentDependencyEdges(key);
+		// cascade to any children if this key is a parent
+		CascadeInvalidateDependencies(operationId, key, default);
 	}
 
 	internal void ExpireMemoryEntryInternal(string operationId, string key, long? timestampThreshold)
@@ -626,6 +813,8 @@ public sealed partial class FusionCache
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling ExpireMemoryEntryInternal (timestampThreshold={TimestampThreshold})", CacheName, InstanceId, operationId, key, timestampThreshold);
 
 		_mca.ExpireEntry(operationId, key, timestampThreshold);
+		// if expiring an entry, cascade to children
+		CascadeInvalidateDependencies(operationId, key, default);
 	}
 
 	// TAGGING

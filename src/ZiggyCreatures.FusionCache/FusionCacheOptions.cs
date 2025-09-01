@@ -18,6 +18,7 @@ public class FusionCacheOptions
 	private string _cacheName;
 	private FusionCacheEntryOptions _defaultEntryOptions;
 	private FusionCacheEntryOptions _tagsDefaultEntryOptions;
+	private CascadeOptions _cascadeOptions = new();
 
 	/// <summary>
 	/// The default value for <see cref="IFusionCache.CacheName"/>.
@@ -114,6 +115,18 @@ public class FusionCacheOptions
 		PluginsInfoLogLevel = LogLevel.Information;
 		PluginsErrorsLogLevel = LogLevel.Error;
 		MissingCacheKeyPrefixWarningLogLevel = LogLevel.Warning;
+	}
+
+	/// <summary>
+	/// Options governing cascading invalidation of dependent cache entries.
+	/// </summary>
+	public CascadeOptions Cascade
+	{
+		get { return _cascadeOptions; }
+		init
+		{
+			_cascadeOptions = value ?? new CascadeOptions();
+		}
 	}
 
 	/// <summary>

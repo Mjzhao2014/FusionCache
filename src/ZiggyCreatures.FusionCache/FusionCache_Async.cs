@@ -324,6 +324,8 @@ public partial class FusionCache
 				{
 					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
 				}
+				// apply dependency edges if declared
+				ApplyEntryDependencies(operationId, key, options);
 			}
 		}
 		finally
@@ -716,6 +718,10 @@ public partial class FusionCache
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
 			}
+			// apply dependency edges if declared
+			ApplyEntryDependencies(operationId, key, options);
+			// if this entry is a parent, cascade invalidation to children
+			CascadeInvalidateDependencies(operationId, key, token);
 
 			if (RequiresDistributedOperations(options))
 			{
@@ -750,6 +756,11 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.RemoveEntry(operationId, key);
+				// drop dependency edges
+				RemoveChildDependencyEdges(key);
+				RemoveParentDependencyEdges(key);
+				// cascade invalidation
+				CascadeInvalidateDependencies(operationId, key, token);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -799,6 +810,8 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.ExpireEntry(operationId, key, null);
+				// cascade invalidation
+				CascadeInvalidateDependencies(operationId, key, token);
 			}
 
 			if (RequiresDistributedOperations(options))

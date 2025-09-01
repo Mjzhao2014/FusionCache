@@ -450,6 +450,11 @@ public sealed class FusionCacheEntryOptions
 	/// </summary>
 	public bool EnableAutoClone { get; set; }
 
+	/// <summary>
+	/// Optional dependency builder describing parents or children associated with this entry if used during a Set/GetOrSet.
+	/// </summary>
+	public DependencyBuilder? Dependencies { get; set; }
+
 	internal bool IsSafeForAdaptiveCaching { get; set; }
 
 	/// <inheritdoc/>
