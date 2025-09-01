@@ -294,6 +294,10 @@ public sealed partial class FusionCache
 		var deps = options.Dependencies;
 		if (deps is null)
 			return;
+		
+		// Check for circular dependencies before applying changes
+		CheckForCircularDependencies(key, deps);
+		
 		var parentKeys = deps.ParentKeys;
 		if (parentKeys is not null && parentKeys.Length > 0)
 		{
@@ -319,6 +323,91 @@ public sealed partial class FusionCache
 				children[c] = 0;
 			}
 		}
+	}
+
+	/// <summary>
+	/// Check if adding the specified dependencies would create a circular dependency.
+	/// </summary>
+	private void CheckForCircularDependencies(string key, DependencyBuilder deps)
+	{
+		// Check parent keys for cycles (key -> parent, does parent lead back to key?)
+		var parentKeys = deps.ParentKeys;
+		if (parentKeys is not null && parentKeys.Length > 0)
+		{
+			foreach (var parent in parentKeys)
+			{
+				var p = parent;
+				MaybePreProcessCacheKey(ref p);
+				
+				// If we're making key depend on parent, check if parent can reach key
+				var visited = new HashSet<string>(StringComparer.Ordinal);
+				var path = new List<string> { key };
+				
+				if (CanReachTarget(p, key, visited, path))
+				{
+					var exception = new FusionCacheDependencyCycleException(
+						$"Circular dependency detected: adding dependency from '{key}' to '{p}' would create a cycle")
+					{
+						Key = key,
+						DependencyChain = path
+					};
+					throw exception;
+				}
+			}
+		}
+
+		// Check child keys for cycles (key -> child, does key lead back to child through existing dependencies?)
+		var childKeys = deps.ChildKeys;
+		if (childKeys is not null && childKeys.Length > 0)
+		{
+			foreach (var child in childKeys)
+			{
+				var c = child;
+				MaybePreProcessCacheKey(ref c);
+				
+				// If we're making key parent of child, check if child can reach key
+				var visited = new HashSet<string>(StringComparer.Ordinal);
+				var path = new List<string> { key };
+				
+				if (CanReachTarget(key, c, visited, path) || key == c)
+				{
+					var exception = new FusionCacheDependencyCycleException(
+						$"Circular dependency detected: adding child dependency from '{key}' to '{c}' would create a cycle")
+					{
+						Key = key,
+						DependencyChain = path
+					};
+					throw exception;
+				}
+			}
+		}
+	}
+
+	/// <summary>
+	/// Check if we can reach target from source through existing dependency graph.
+	/// </summary>
+	private bool CanReachTarget(string source, string target, HashSet<string> visited, List<string> path)
+	{
+		if (source == target)
+			return true;
+			
+		if (!visited.Add(source))
+			return false; // Already visited, avoid infinite loop
+		
+		path.Add(source);
+		
+		// Check all children of source
+		if (_dependencies.TryGetValue(source, out var children))
+		{
+			foreach (var child in children.Keys)
+			{
+				if (CanReachTarget(child, target, visited, path))
+					return true;
+			}
+		}
+		
+		path.RemoveAt(path.Count - 1);
+		return false;
 	}
 
 	private void CascadeInvalidateChildren(string operationId, string parentKey, FusionCacheEntryOptions baseOptions, CancellationToken token)

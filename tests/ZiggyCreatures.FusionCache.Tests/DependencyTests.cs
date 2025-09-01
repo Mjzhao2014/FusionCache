@@ -459,24 +459,14 @@ public class DependencyTests : AbstractTests
 		cache.Set("circular-b", "value-b", options => options
 			.WithDependencies(DependsOn.Keys("circular-a")));
 
-		// Now make A depend on B (creating circular dependency)
-		cache.Set("circular-a", "new-value-a", options => options
-			.WithDependencies(DependsOn.Keys("circular-b")));
+		// Now try to make A depend on B (creating circular dependency) - should throw exception
+		Assert.Throws<FusionCacheDependencyCycleException>(() =>
+			cache.Set("circular-a", "new-value-a", options => options
+				.WithDependencies(DependsOn.Keys("circular-b"))));
 
-		// Verify both exist
-		Assert.Equal("new-value-a", cache.GetOrDefault<string>("circular-a"));
+		// Verify original values are still intact (no partial update occurred)
+		Assert.Equal("value-a", cache.GetOrDefault<string>("circular-a"));
 		Assert.Equal("value-b", cache.GetOrDefault<string>("circular-b"));
-
-		// Update one of them - should not cause infinite loop
-		cache.Set("circular-b", "newer-value-b");
-
-		// The system should handle this gracefully (implementation-dependent behavior)
-		// At minimum, it shouldn't hang or crash
-		var valueA = cache.GetOrDefault<string>("circular-a");
-		var valueB = cache.GetOrDefault<string>("circular-b");
-
-		// At least one should be updated
-		Assert.Equal("newer-value-b", valueB);
 	}
 
 	[Fact]
@@ -486,15 +476,13 @@ public class DependencyTests : AbstractTests
 
 		// Entry depends on itself
 		cache.Set("self-ref", "initial-value");
-		cache.Set("self-ref", "self-dependent-value", options => options
-			.WithDependencies(DependsOn.Keys("self-ref")));
 
-		// Should not cause issues
-		Assert.Equal("self-dependent-value", cache.GetOrDefault<string>("self-ref"));
+		Assert.Throws<FusionCacheDependencyCycleException>(() =>
+			cache.Set("self-ref", "self-dependent-value", options => options
+			.WithDependencies(DependsOn.Keys("self-ref"))));
 
-		// Updating should work without infinite loops
-		cache.Set("self-ref", "final-value");
-		Assert.Equal("final-value", cache.GetOrDefault<string>("self-ref"));
+		// Verify original values are still intact
+		Assert.Equal("initial-value", cache.GetOrDefault<string>("self-ref"));
 	}
 
 	[Fact]
