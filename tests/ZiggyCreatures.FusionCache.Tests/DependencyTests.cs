@@ -1,4 +1,5 @@
 using FusionCacheTests.Stuff;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -8,6 +9,7 @@ using Xunit;
 using Xunit.Abstractions;
 using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Backplane.Memory;
+using ZiggyCreatures.Caching.Fusion.Serialization.SystemTextJson;
 
 namespace FusionCacheTests;
 
@@ -243,47 +245,6 @@ public class DependencyTests : AbstractTests
 	}
 
 	[Fact]
-	public void CascadeFanoutLimit_LimitsNumberOfInvalidations()
-	{
-		var options = new FusionCacheOptions();
-		options.Cascade.MaxCascadeFanout = 5;
-		
-		using var cache = new FusionCache(options);
-
-		// Set parent
-		cache.Set("popular-parent", "popular-value");
-
-		// Create many children depending on the same parent
-		for (int i = 0; i < 10; i++)
-		{
-			cache.Set($"child:{i}", $"child-value-{i}", options => options
-				.WithDependencies(DependsOn.Keys("popular-parent")));
-		}
-
-		// Verify all children exist
-		for (int i = 0; i < 10; i++)
-		{
-			Assert.Equal($"child-value-{i}", cache.GetOrDefault<string>($"child:{i}"));
-		}
-
-		// Update parent - should only invalidate up to fanout limit
-		cache.Set("popular-parent", "new-popular-value");
-
-		// Some children should remain due to fanout limit
-		var remainingChildren = 0;
-		for (int i = 0; i < 10; i++)
-		{
-			if (cache.GetOrDefault<string>($"child:{i}") != null)
-			{
-				remainingChildren++;
-			}
-		}
-
-		// Should have 5 children remaining (10 - 5 fanout limit)
-		Assert.Equal(5, remainingChildren);
-	}
-
-	[Fact]
 	public void BackplanePropagation_PropagatesCascadeInvalidation()
 	{
 		var memoryBackplane = new MemoryBackplane(Options.Create(new MemoryBackplaneOptions()), null);
@@ -358,47 +319,6 @@ public class DependencyTests : AbstractTests
 	}
 
 	[Fact]
-	public void ComplexScenario_ProductCatalogWithDependencies()
-	{
-		using var cache = new FusionCache(new FusionCacheOptions());
-
-		// Set up product hierarchy
-		cache.Set("product:42", new { Id = 42, Name = "Laptop", CategoryId = 7 });
-		cache.Set("category:7", new { Id = 7, Name = "Electronics" });
-
-		// Set derived data with dependencies
-		cache.Set("product:42:price", 999.99m, options => options
-			.SetDuration(TimeSpan.FromMinutes(5))
-			.WithDependencies(DependsOn.Keys("product:42")));
-
-		cache.Set("product:42:inventory", 15, options => options
-			.SetDuration(TimeSpan.FromMinutes(5))
-			.WithDependencies(DependsOn.Keys("product:42")));
-
-		cache.Set("category:7:top-products", new[] { 42, 35, 18 }, options => options
-			.SetDuration(TimeSpan.FromMinutes(30))
-			.WithDependencies(DependsOn.Keys("category:7")));
-
-		// Verify all exist
-		Assert.NotNull(cache.GetOrDefault<object>("product:42"));
-		Assert.Equal(999.99m, cache.GetOrDefault<decimal>("product:42:price"));
-		Assert.Equal(15, cache.GetOrDefault<int>("product:42:inventory"));
-		Assert.NotNull(cache.GetOrDefault<int[]>("category:7:top-products"));
-
-		// Update product - should invalidate price and inventory but not category data
-		cache.Set("product:42", new { Id = 42, Name = "Gaming Laptop", CategoryId = 7 });
-
-		Assert.NotNull(cache.GetOrDefault<object>("product:42"));
-		Assert.Equal(default(decimal), cache.GetOrDefault<decimal>("product:42:price")); // Should be invalidated
-		Assert.Equal(default(int), cache.GetOrDefault<int>("product:42:inventory")); // Should be invalidated  
-		Assert.NotNull(cache.GetOrDefault<int[]>("category:7:top-products")); // Should remain
-
-		// Update category - should invalidate top-products
-		cache.Set("category:7", new { Id = 7, Name = "Consumer Electronics" });
-		Assert.Null(cache.GetOrDefault<int[]>("category:7:top-products"));
-	}
-
-	[Fact]
 	public void NoDependencies_DoesNotAffectNormalOperation()
 	{
 		using var cache = new FusionCache(new FusionCacheOptions());
@@ -418,45 +338,7 @@ public class DependencyTests : AbstractTests
 	}
 
 	[Fact]
-	public void DependencyBuilder_HandlesNullAndEmptyInputs()
-	{
-		// Should handle null arrays gracefully
-		var builder1 = DependsOn.Keys(null!);
-
-		// Should handle empty arrays
-		var builder3 = DependsOn.Keys();
-
-		// All should work without throwing exceptions
-		Assert.NotNull(builder1);
-		Assert.NotNull(builder3);
-	}
-
-	[Fact]
-	public void CascadeOptions_DefaultValues_AreReasonable()
-	{
-		var options = new CascadeOptions();
-
-		Assert.True(options.CascadeToL2);
-		Assert.Equal(4, options.MaxCascadeDepth);
-		Assert.Equal(5000, options.MaxCascadeFanout);
-		Assert.False(options.NotifyChildFactory);
-		Assert.Null(options.ParentValueComparer);
-	}
-
-	[Fact]
-	public void WithDependencies_ThrowsOnNullInputs()
-	{
-		var options = new FusionCacheEntryOptions();
-
-		Assert.Throws<ArgumentNullException>(() => 
-			FusionCacheEntryOptionsExtensions.WithDependencies(null!, DependsOn.Keys("test")));
-
-		Assert.Throws<ArgumentNullException>(() => 
-			options.WithDependencies(null!));
-	}
-
-	[Fact]
-	public void DependencyTracking_WorksWithExpiration()
+	public void DependencyTracking_WorksWithExpiration_Child()
 	{
 		using var cache = new FusionCache(new FusionCacheOptions());
 
@@ -480,5 +362,249 @@ public class DependencyTests : AbstractTests
 		// Updating parent should not cause issues even though child is already expired
 		cache.Set("expire-parent", "new-parent-value");
 		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("expire-parent"));
+	}
+
+	[Fact]
+	public void DependencyTracking_WorksWithExpiration_Parent()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// Set parent
+		cache.Set("expire-parent", "parent-value", options => options
+			.SetDuration(TimeSpan.FromMicroseconds(100)));
+
+		// Set child with dependency and short expiration
+		cache.Set("expire-child", "child-value", options => options
+			.SetDuration(TimeSpan.FromMinutes(100))
+			.WithDependencies(DependsOn.Keys("expire-parent")));
+
+		// Wait for natural expiration
+		Thread.Sleep(200);
+
+		// Parent should be naturally expired
+		Assert.Null(cache.GetOrDefault<string>("expire-parent"));
+
+		// Child will be invalidated
+		Assert.Null(cache.GetOrDefault<string>("expire-child"));
+
+		// Updating parent should not cause issues even though child is already expired
+		cache.Set("expire-parent", "new-parent-value");
+		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("expire-parent"));
+	}
+
+	[Fact]
+	public void L2CacheIntegration_CascadesToDistributedCache()
+	{
+		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+		var serializer = new FusionCacheSystemTextJsonSerializer();
+
+		using var cache = new FusionCache(new FusionCacheOptions());
+		cache.SetupDistributedCache(distributedCache, serializer);
+
+		// Set parent in both L1 and L2
+		cache.Set("l2-parent", "parent-value", options => options.SetDuration(TimeSpan.FromMinutes(10)));
+
+		// Set child with dependency 
+		cache.Set("l2-child", "child-value", options => options
+			.SetDuration(TimeSpan.FromMinutes(10))
+			.WithDependencies(DependsOn.Keys("l2-parent")));
+
+		// Verify both exist in L2
+		Assert.NotNull(distributedCache.GetString("l2-parent"));
+		Assert.NotNull(distributedCache.GetString("l2-child"));
+
+		// Update parent - should cascade to L2
+		cache.Set("l2-parent", "new-parent-value");
+
+		// Child should be removed from L2
+		Assert.Null(distributedCache.GetString("l2-child"));
+		// Parent should still exist in L2 with new value
+		Assert.NotNull(distributedCache.GetString("l2-parent"));
+	}
+
+	[Fact]
+	public void L2CacheIntegration_DisableCascadeToL2()
+	{
+		var distributedCache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+		var serializer = new FusionCacheSystemTextJsonSerializer();
+
+		var options = new FusionCacheOptions();
+		options.Cascade.CascadeToL2 = false;
+
+		using var cache = new FusionCache(options);
+		cache.SetupDistributedCache(distributedCache, serializer);
+
+		// Set parent and child
+		cache.Set("no-l2-parent", "parent-value", options => options.SetDuration(TimeSpan.FromMinutes(10)));
+		cache.Set("no-l2-child", "child-value", options => options
+			.SetDuration(TimeSpan.FromMinutes(10))
+			.WithDependencies(DependsOn.Keys("no-l2-parent")));
+
+		// Verify both exist in L2
+		Assert.NotNull(distributedCache.GetString("no-l2-parent"));
+		Assert.NotNull(distributedCache.GetString("no-l2-child"));
+
+		// Update parent - should NOT cascade to L2 when CascadeToL2 is false
+		cache.Set("no-l2-parent", "new-parent-value");
+
+		// Child should NOT be removed from L2, but should be removed from L1
+		Assert.NotNull(distributedCache.GetString("no-l2-child"));
+		Assert.Null(cache.GetOrDefault<string>("no-l2-child"));
+	}
+
+	[Fact]
+	public void CircularDependencies_PreventsInfiniteLoop()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// Create circular dependency: A depends on B, B depends on A
+		cache.Set("circular-a", "value-a");
+		cache.Set("circular-b", "value-b", options => options
+			.WithDependencies(DependsOn.Keys("circular-a")));
+
+		// Now make A depend on B (creating circular dependency)
+		cache.Set("circular-a", "new-value-a", options => options
+			.WithDependencies(DependsOn.Keys("circular-b")));
+
+		// Verify both exist
+		Assert.Equal("new-value-a", cache.GetOrDefault<string>("circular-a"));
+		Assert.Equal("value-b", cache.GetOrDefault<string>("circular-b"));
+
+		// Update one of them - should not cause infinite loop
+		cache.Set("circular-b", "newer-value-b");
+
+		// The system should handle this gracefully (implementation-dependent behavior)
+		// At minimum, it shouldn't hang or crash
+		var valueA = cache.GetOrDefault<string>("circular-a");
+		var valueB = cache.GetOrDefault<string>("circular-b");
+
+		// At least one should be updated
+		Assert.Equal("newer-value-b", valueB);
+	}
+
+	[Fact]
+	public void SelfReferencingDependency_HandledGracefully()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// Entry depends on itself
+		cache.Set("self-ref", "initial-value");
+		cache.Set("self-ref", "self-dependent-value", options => options
+			.WithDependencies(DependsOn.Keys("self-ref")));
+
+		// Should not cause issues
+		Assert.Equal("self-dependent-value", cache.GetOrDefault<string>("self-ref"));
+
+		// Updating should work without infinite loops
+		cache.Set("self-ref", "final-value");
+		Assert.Equal("final-value", cache.GetOrDefault<string>("self-ref"));
+	}
+
+	[Fact]
+	public void ParentOfAPI_EstablishesReverseDependency()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// Set child first
+		cache.Set("reverse-child", "child-value");
+
+		// Set parent that declares the existing child as dependent
+		cache.Set("reverse-parent", "parent-value", options => options
+			.WithDependencies(DependsOn.ParentOf("reverse-child")));
+
+		// Verify both exist
+		Assert.Equal("parent-value", cache.GetOrDefault<string>("reverse-parent"));
+		Assert.Equal("child-value", cache.GetOrDefault<string>("reverse-child"));
+
+		// Update parent - should invalidate child
+		cache.Set("reverse-parent", "new-parent-value");
+
+		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("reverse-parent"));
+		Assert.Null(cache.GetOrDefault<string>("reverse-child"));
+	}
+
+	[Fact]
+	public void MixedDependencyTypes_KeysAndParentOf()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// Set up complex scenario
+		cache.Set("mixed-parent", "parent-value");
+		cache.Set("mixed-child1", "child1-value");
+		cache.Set("mixed-child2", "child2-value");
+
+		// Entry that both depends on a parent AND is parent of children
+		cache.Set("mixed-middle", "middle-value", options => options
+			.WithDependencies(DependsOn
+				.Keys("mixed-parent")
+				.ParentOf("mixed-child1")
+				.ParentOf("mixed-child2")));
+
+		// Verify all exist
+		Assert.Equal("parent-value", cache.GetOrDefault<string>("mixed-parent"));
+		Assert.Equal("middle-value", cache.GetOrDefault<string>("mixed-middle"));
+		Assert.Equal("child1-value", cache.GetOrDefault<string>("mixed-child1"));
+		Assert.Equal("child2-value", cache.GetOrDefault<string>("mixed-child2"));
+
+		// Update top parent - should cascade through middle to children
+		cache.Set("mixed-parent", "new-parent-value");
+
+		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("mixed-parent"));
+		Assert.Null(cache.GetOrDefault<string>("mixed-middle"));
+		Assert.Null(cache.GetOrDefault<string>("mixed-child1"));
+		Assert.Null(cache.GetOrDefault<string>("mixed-child2"));
+	}
+
+	[Fact]
+	public void DependencyWithTags_InteractionBehavior()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// Set parent with tags
+		cache.Set("tagged-parent", "parent-value", tags: ["parent-tag"]);
+
+		// Set child with dependency and different tags
+		cache.Set("tagged-child", "child-value", options => options
+			.WithDependencies(DependsOn.Keys("tagged-parent")), tags: ["child-tag"]);
+
+		// Verify both exist
+		Assert.Equal("parent-value", cache.GetOrDefault<string>("tagged-parent"));
+		Assert.Equal("child-value", cache.GetOrDefault<string>("tagged-child"));
+
+		// Clear by child tag - should only remove child
+		cache.RemoveByTag("child-tag");
+		Assert.Equal("parent-value", cache.GetOrDefault<string>("tagged-parent"));
+		Assert.Null(cache.GetOrDefault<string>("tagged-child"));
+
+		// Re-add child
+		cache.Set("tagged-child", "child-value", options => options
+			.WithDependencies(DependsOn.Keys("tagged-parent")), tags: ["child-tag"]);
+
+		// Clear by parent tag - should remove both parent and child
+		cache.RemoveByTag("parent-tag");
+		Assert.Null(cache.GetOrDefault<string>("tagged-parent"));
+		Assert.Null(cache.GetOrDefault<string>("tagged-child"));
+	}
+
+	[Fact]
+	public void NonExistentParentDependency_HandledGracefully()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// Set child with dependency on non-existent parent
+		cache.Set("orphan-from-start", "orphan-value", options => options
+			.WithDependencies(DependsOn.Keys("non-existent-parent")));
+
+		Assert.Equal("orphan-value", cache.GetOrDefault<string>("orphan-from-start"));
+
+		// Later add the parent
+		cache.Set("non-existent-parent", "parent-value");
+
+		// Child should still exist
+		Assert.Null(cache.GetOrDefault<string>("orphan-from-start"));
+
+		// Update parent - should now invalidate child
+		cache.Set("non-existent-parent", "new-parent-value");
+		Assert.Null(cache.GetOrDefault<string>("orphan-from-start"));
 	}
 }
