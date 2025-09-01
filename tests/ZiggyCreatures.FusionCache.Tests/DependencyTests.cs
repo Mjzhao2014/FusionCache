@@ -184,7 +184,7 @@ public class DependencyTests : AbstractTests
 	}
 
 	[Fact]
-	public void RemoveEntry_emovesDependenciesAndCascades_CleansDependencyGraphAndPreventsStaleReferences()
+	public void RemoveEntry_RemovesDependenciesAndCascades_CleansDependencyGraphAndPreventsStaleReferences()
 	{
 		using var cache = new FusionCache(new FusionCacheOptions());
 
