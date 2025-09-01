@@ -295,6 +295,7 @@ internal partial class BackplaneAccessor
 
 				// HANDLE REMOVE
 				_cache.RemoveMemoryEntryInternal(operationId, message.CacheKey!);
+				_cache.InvalidateDescendants(message.CacheKey!);
 				break;
 			case BackplaneMessageAction.EntryExpire:
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -302,6 +303,7 @@ internal partial class BackplaneAccessor
 
 				// HANDLE EXPIRE
 				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
+				_cache.InvalidateDescendants(message.CacheKey!);
 				break;
 			default:
 				// HANDLE UNKNOWN: DO NOTHING
@@ -365,7 +367,8 @@ internal partial class BackplaneAccessor
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] distributed cache not currently usable, expiring local memory entry", _cache.CacheName, _cache.InstanceId, operationId, cacheKey);
 
 				_cache.ExpireMemoryEntryInternal(operationId, cacheKey, message.Timestamp);
-
+				// Cascade invalidation of dependencies
+				_cache.InvalidateDescendants(cacheKey);
 				return;
 			}
 
@@ -389,7 +392,9 @@ internal partial class BackplaneAccessor
 			}
 		}
 
+		// Expire current entry and cascade invalidation
 		_cache.ExpireMemoryEntryInternal(operationId, cacheKey, message.Timestamp);
+		_cache.InvalidateDescendants(cacheKey);
 	}
 
 	private async ValueTask MaybeUpdateTaggingTimestampAsync(string operationId, BackplaneMessage message)

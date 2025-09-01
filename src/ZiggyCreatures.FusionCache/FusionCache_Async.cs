@@ -344,6 +344,10 @@ public partial class FusionCache
 				}
 			}
 
+			// Update dependencies and cascade invalidation
+			UpdateEntryDependencies(key, options);
+			InvalidateDescendants(key);
+
 			// EVENT
 			_events.OnMiss(operationId, key, activity);
 			_events.OnSet(operationId, key);
@@ -712,6 +716,9 @@ public partial class FusionCache
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
+			// Update dependency edges for this entry if configured
+			UpdateEntryDependencies(key, options);
+
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
@@ -724,6 +731,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			// Cascade invalidation for children if needed
+			InvalidateDescendants(key);
 		}
 		catch (Exception exc)
 		{
@@ -735,7 +744,7 @@ public partial class FusionCache
 
 	// REMOVE
 
-	private async ValueTask RemoveInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+	private async ValueTask RemoveInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool skipCascade = false)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -759,6 +768,11 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnRemove(operationId, key);
+			// Cascade if not skipping
+			if (!skipCascade)
+			{
+				InvalidateDescendants(key);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -784,7 +798,7 @@ public partial class FusionCache
 
 	// EXPIRE
 
-	private async ValueTask ExpireInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+	private async ValueTask ExpireInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool skipCascade = false)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -808,6 +822,10 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnExpire(operationId, key);
+			if (!skipCascade)
+			{
+				InvalidateDescendants(key);
+			}
 		}
 		catch (Exception exc)
 		{

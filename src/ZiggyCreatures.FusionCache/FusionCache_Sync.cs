@@ -344,6 +344,10 @@ public partial class FusionCache
 				}
 			}
 
+			// Update dependency edges and cascade invalidation if this is a brand new value
+			UpdateEntryDependencies(key, options);
+			InvalidateDescendants(key);
+
 			// EVENT
 			_events.OnMiss(operationId, key, activity);
 			_events.OnSet(operationId, key);
@@ -712,6 +716,9 @@ public partial class FusionCache
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
+			// Update any configured dependency edges for this entry
+			UpdateEntryDependencies(key, options);
+
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
@@ -724,6 +731,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			// Cascade invalidation to any children if this key is a parent
+			InvalidateDescendants(key);
 		}
 		catch (Exception exc)
 		{
@@ -735,7 +744,7 @@ public partial class FusionCache
 
 	// REMOVE
 
-	private void RemoveInternal(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+	private void RemoveInternal(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool skipCascade = false)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -759,6 +768,11 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnRemove(operationId, key);
+			// Cascade dependency invalidation if this key has children and we are not skipping
+			if (!skipCascade)
+			{
+				InvalidateDescendants(key);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -784,7 +798,7 @@ public partial class FusionCache
 
 	// EXPIRE
 
-	private void ExpireInternal(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+	private void ExpireInternal(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool skipCascade = false)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -808,6 +822,10 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnExpire(operationId, key);
+			if (!skipCascade)
+			{
+				InvalidateDescendants(key);
+			}
 		}
 		catch (Exception exc)
 		{

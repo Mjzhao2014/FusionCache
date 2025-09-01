@@ -295,6 +295,8 @@ internal partial class BackplaneAccessor
 
 				// HANDLE REMOVE
 				_cache.RemoveMemoryEntryInternal(operationId, message.CacheKey!);
+				// Cascading invalidation on remote nodes
+				_cache.InvalidateDescendants(message.CacheKey!);
 				break;
 			case BackplaneMessageAction.EntryExpire:
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -302,6 +304,7 @@ internal partial class BackplaneAccessor
 
 				// HANDLE EXPIRE
 				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
+				_cache.InvalidateDescendants(message.CacheKey!);
 				break;
 			default:
 				// HANDLE UNKNOWN: DO NOTHING
@@ -389,7 +392,10 @@ internal partial class BackplaneAccessor
 			}
 		}
 
+		// The local memory entry is stale, expire it now
 		_cache.ExpireMemoryEntryInternal(operationId, cacheKey, message.Timestamp);
+		// Cascade invalidation to dependent children
+		_cache.InvalidateDescendants(cacheKey);
 	}
 
 	private void MaybeUpdateTaggingTimestamp(string operationId, BackplaneMessage message)

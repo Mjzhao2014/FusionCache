@@ -139,6 +139,18 @@ public sealed class FusionCacheEntryOptions
 	public CacheItemPriority Priority { get; set; }
 
 	/// <summary>
+	/// An optional set of parent keys this entry depends on, if configured via dependency support.
+	/// </summary>
+	[EditorBrowsable(EditorBrowsableState.Never)]
+	internal string[]? DependencyParentKeys { get; set; }
+
+	/// <summary>
+	/// An optional set of child keys this entry is the parent of, if configured via dependency support.
+	/// </summary>
+	[EditorBrowsable(EditorBrowsableState.Never)]
+	internal string[]? DependencyChildKeys { get; set; }
+
+	/// <summary>
 	/// Returns a stale (expired) value even in read-only operations (eg: TryGet/GetOrDefault).
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/FailSafe.md"/>
@@ -1125,6 +1137,8 @@ public sealed class FusionCacheEntryOptions
 
 			SkipMemoryCacheRead = SkipMemoryCacheRead,
 			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
+			DependencyParentKeys = DependencyParentKeys,
+			DependencyChildKeys = DependencyChildKeys,
 
 			EnableAutoClone = EnableAutoClone
 		};

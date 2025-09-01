@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Collections.Generic;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -61,6 +62,11 @@ public sealed partial class FusionCache
 	// TAGGING
 	private readonly FusionCacheEntryOptions _tagsDefaultEntryOptions;
 	private readonly FusionCacheEntryOptions _cascadeRemoveByTagEntryOptions;
+
+	// DEPENDENCY GRAPH
+	private readonly object _dependencyLock = new();
+	private readonly Dictionary<string, HashSet<string>> _parentToChildren = [];
+	private readonly Dictionary<string, HashSet<string>> _childToParents = [];
 
 	internal readonly string TagInternalCacheKeyPrefix;
 
@@ -695,6 +701,154 @@ public sealed partial class FusionCache
 			_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): executing a raw clear", _options.CacheName, _options.InstanceId, operationId);
 
 		return _mca.TryClear();
+	}
+
+	// DEPENDENCIES
+
+	private void UpdateEntryDependencies(string key, FusionCacheEntryOptions options)
+	{
+		// Interpret parent/child arrays if present
+		if (options.DependencyParentKeys is { Length: > 0 })
+		{
+			// Remove old parent edges for this child
+			RemoveChildEdges(key);
+			foreach (var parentKey in options.DependencyParentKeys)
+			{
+				AddDependency(key, parentKey);
+			}
+		}
+		if (options.DependencyChildKeys is { Length: > 0 })
+		{
+			foreach (var childKey in options.DependencyChildKeys)
+			{
+				AddDependency(childKey, key);
+			}
+		}
+	}
+
+	private void AddDependency(string childKey, string parentKey)
+	{
+		// We consider simple string equality for now
+		lock (_dependencyLock)
+		{
+			// Detect cycles: check if adding parentKey->childKey creates a path back to parentKey.
+			if (WouldCreateCycle(childKey, parentKey))
+			{
+				throw new FusionCacheDependencyCycleException($"Adding dependency from '{parentKey}' to '{childKey}' would create a cycle");
+			}
+			if (!_parentToChildren.TryGetValue(parentKey, out var children))
+			{
+				children = [];
+				_parentToChildren[parentKey] = children;
+			}
+			children.Add(childKey);
+			if (!_childToParents.TryGetValue(childKey, out var parents))
+			{
+				parents = [];
+				_childToParents[childKey] = parents;
+			}
+			parents.Add(parentKey);
+		}
+	}
+
+	private void RemoveChildEdges(string childKey)
+	{
+		lock (_dependencyLock)
+		{
+			if (_childToParents.TryGetValue(childKey, out var parents))
+			{
+				foreach (var parent in parents)
+				{
+					if (_parentToChildren.TryGetValue(parent, out var children))
+					{
+						children.Remove(childKey);
+						if (children.Count == 0)
+						{
+							_parentToChildren.Remove(parent);
+						}
+					}
+				}
+				_childToParents.Remove(childKey);
+			}
+		}
+	}
+
+	private bool WouldCreateCycle(string startChildKey, string parentKey)
+	{
+		// BFS from child to see if parent already reachable
+		var visited = new HashSet<string> { startChildKey };
+		var queue = new Queue<string>();
+		queue.Enqueue(startChildKey);
+		while (queue.Count > 0)
+		{
+			var current = queue.Dequeue();
+			if (_parentToChildren.TryGetValue(current, out var children))
+			{
+				foreach (var child in children)
+				{
+					if (child == parentKey)
+						return true;
+					if (visited.Add(child))
+					{
+						queue.Enqueue(child);
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	private List<string> GetDescendants(string key)
+	{
+		var result = new List<string>();
+		var visited = new HashSet<string>();
+		var queue = new Queue<(string node, int depth)>();
+		queue.Enqueue((key, 0));
+		visited.Add(key);
+		var maxDepth = _options.Cascade.MaxCascadeDepth;
+		var maxFanout = _options.Cascade.MaxCascadeFanout;
+		while (queue.Count > 0)
+		{
+			var (current, depth) = queue.Dequeue();
+			if (depth >= maxDepth)
+				continue;
+			if (_parentToChildren.TryGetValue(current, out var children))
+			{
+				foreach (var child in children)
+				{
+					if (!visited.Add(child))
+						continue;
+					result.Add(child);
+					if (result.Count >= maxFanout)
+						return result;
+					queue.Enqueue((child, depth + 1));
+				}
+			}
+		}
+		return result;
+	}
+
+	internal void InvalidateDescendants(string key)
+	{
+		// Gather children upfront under lock
+		List<string> toInvalidate;
+		lock (_dependencyLock)
+		{
+			toInvalidate = GetDescendants(key);
+		}
+		if (toInvalidate.Count == 0)
+			return;
+		foreach (var child in toInvalidate)
+		{
+			// Build a removal options honoring cascade to L2
+			var opts = _cascadeRemoveByTagEntryOptions;
+			if (_options.Cascade.CascadeToL2 == false)
+			{
+				opts = opts.Duplicate();
+				opts.SkipDistributedCacheWrite = true;
+			}
+			RemoveInternal(child, opts, default, skipCascade: true);
+		}
 	}
 
 	// SERIALIZATION
