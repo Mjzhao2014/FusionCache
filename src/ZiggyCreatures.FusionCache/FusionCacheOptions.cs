@@ -193,7 +193,7 @@ public class FusionCacheOptions
 	/// <summary>
 	/// Options controlling cascading dependency invalidations.
 	/// </summary>
-	public CascadeOptions Cascade { get; } = new CascadeOptions();
+	public CascadeOptions Cascade { get; } = new ();
 
 	/// <summary>
 	/// The duration of the circuit-breaker used when working with the distributed cache. Defaults to <see cref="TimeSpan.Zero"/>, which means the circuit-breaker will never be activated.
