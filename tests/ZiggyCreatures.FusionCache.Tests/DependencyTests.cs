@@ -145,7 +145,7 @@ public class DependencyTests : AbstractTests
 		cache.Set("parent:config", "config-value");
 
 		// Use GetOrSet with dependencies
-		var result = cache.GetOrSet("derived:config", 
+		var result = cache.GetOrSet("derived:config",
 			_ => "derived-config-value",
 			options => options
 				.SetDuration(TimeSpan.FromMinutes(5))
@@ -168,7 +168,8 @@ public class DependencyTests : AbstractTests
 
 		// Use GetOrSetAsync with dependencies
 		var result = await cache.GetOrSetAsync("derived:settings",
-			async _ => {
+			async _ =>
+			{
 				await Task.Delay(10); // Simulate async work
 				return "derived-settings-value";
 			},
@@ -188,6 +189,7 @@ public class DependencyTests : AbstractTests
 	{
 		using var cache = new FusionCache(new FusionCacheOptions());
 
+		// SCENARIO 1: Simple one-parent case (current test)
 		// Set up initial dependency: parent -> child
 		cache.Set("parent", "parent-value");
 		cache.Set("child", "child-value", options => options
@@ -218,6 +220,39 @@ public class DependencyTests : AbstractTests
 		// Child should still exist (proving no stale dependency)
 		Assert.Equal("updated-parent-value", cache.GetOrDefault<string>("parent"));
 		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
+
+		// SCENARIO 2: Multiple-parents case to test complete cleanup
+		// Set up a child with multiple parents
+		cache.Set("parent1", "parent1-value");
+		cache.Set("parent2", "parent2-value");
+		cache.Set("multi-child", "multi-child-value", options => options
+			.WithDependencies(DependsOn.Keys("parent1", "parent2")));
+
+		// Verify all exist
+		Assert.Equal("parent1-value", cache.GetOrDefault<string>("parent1"));
+		Assert.Equal("parent2-value", cache.GetOrDefault<string>("parent2"));
+		Assert.Equal("multi-child-value", cache.GetOrDefault<string>("multi-child"));
+
+		// Remove one parent - this should cascade to child and clean up ALL dependency edges for the child
+		cache.Remove("parent1");
+
+		// Parent1 and child should be gone
+		Assert.Null(cache.GetOrDefault<string>("parent1"));
+		Assert.Null(cache.GetOrDefault<string>("multi-child"));
+		// Parent2 should still exist
+		Assert.Equal("parent2-value", cache.GetOrDefault<string>("parent2"));
+
+		// Re-add the child WITHOUT any dependencies
+		cache.Set("multi-child", "new-multi-child-value");
+		Assert.Equal("new-multi-child-value", cache.GetOrDefault<string>("multi-child"));
+
+		// Update parent2 - this should NOT affect the new child if dependency cleanup was complete
+		// This test will FAIL if stale references remain in the dependency graph
+		cache.Set("parent2", "updated-parent2-value");
+
+		// Child should still exist (proving no stale dependency from parent2)
+		Assert.Equal("updated-parent2-value", cache.GetOrDefault<string>("parent2"));
+		Assert.Equal("new-multi-child-value", cache.GetOrDefault<string>("multi-child"));
 	}
 
 	[Fact]
@@ -225,16 +260,16 @@ public class DependencyTests : AbstractTests
 	{
 		var options = new FusionCacheOptions();
 		options.Cascade.MaxCascadeDepth = 2;
-		
+
 		using var cache = new FusionCache(options);
 
 		// Set up deep chain: level0 -> level1 -> level2 -> level3 -> level4
 		cache.Set("level0", "value0");
-		
+
 		for (int i = 1; i <= 4; i++)
 		{
 			cache.Set($"level{i}", $"value{i}", options => options
-				.WithDependencies(DependsOn.Keys($"level{i-1}")));
+				.WithDependencies(DependsOn.Keys($"level{i - 1}")));
 		}
 
 		// Verify all exist
@@ -260,7 +295,7 @@ public class DependencyTests : AbstractTests
 	public void BackplanePropagation_PropagatesCascadeInvalidation()
 	{
 		var memoryBackplane = new MemoryBackplane(Options.Create(new MemoryBackplaneOptions()), null);
-		
+
 		// Create two cache instances sharing the same backplane
 		var cache1 = new FusionCache(new FusionCacheOptions { CacheName = "test-cache-1" });
 		cache1.SetupBackplane(memoryBackplane);
@@ -295,7 +330,7 @@ public class DependencyTests : AbstractTests
 	public async Task BackplanePropagationAsync_PropagatesCascadeInvalidation()
 	{
 		var memoryBackplane = new MemoryBackplane(Options.Create(new MemoryBackplaneOptions()), null);
-		
+
 		// Create two cache instances sharing the same backplane
 		var cache1 = new FusionCache(new FusionCacheOptions { CacheName = "test-cache-1" });
 		cache1.SetupBackplane(memoryBackplane);
