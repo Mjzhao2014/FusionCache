@@ -317,49 +317,91 @@ public partial class FusionCache
 				}
 			}
 
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (entry is not null)
+		// SAVING THE DATA IN THE MEMORY CACHE
+		if (entry is not null)
+		{
+			if (_mca.ShouldWrite(options))
 			{
-				if (_mca.ShouldWrite(options))
-				{
-					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
-				}
+				_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+			}
+			// APPLY DEPENDENCIES IF REQUESTED
+			if (options.Dependencies is not null)
+			{
+				ApplyDependencies(key, options.Dependencies);
 			}
 		}
-		finally
-		{
-			// MEMORY LOCK
-			if (memoryLockObj is not null)
-				ReleaseMemoryLock(operationId, key, memoryLockObj);
-		}
+	}
+	finally
+	{
+		// MEMORY LOCK
+		if (memoryLockObj is not null)
+			ReleaseMemoryLock(operationId, key, memoryLockObj);
+	}
 
+	// Determine if cascade invalidation needed for parent keys
+	bool cascadeNeeded = false;
+	if (entry is not null)
+	{
 		if (hasNewValue)
 		{
-			// DISTRIBUTED
-			if (entry is not null && isStale == false)
+			cascadeNeeded = true;
+		}
+		else if (_options.Cascade.ParentValueComparer is not null && memoryEntry is not null)
+		{
+			try
 			{
-				if (RequiresDistributedOperations(options))
+				var oldVal = memoryEntry.GetValue<TValue>();
+				var newVal = entry.GetValue<TValue>();
+				if (_options.Cascade.ParentValueComparer.Equals(oldVal, newVal) == false)
 				{
-					DistributedSetEntry<TValue>(operationId, key, entry, options, token);
+					cascadeNeeded = true;
 				}
 			}
+			catch
+			{
+				cascadeNeeded = true;
+			}
+		}
+	}
 
-			// EVENT
-			_events.OnMiss(operationId, key, activity);
-			_events.OnSet(operationId, key);
-		}
-		else if (entry is not null)
+	if (hasNewValue)
+	{
+		// DISTRIBUTED
+		if (entry is not null && isStale == false)
 		{
-			// EVENT
-			_events.OnHit(operationId, key, isStale || entry.IsStale(), activity);
+			if (RequiresDistributedOperations(options))
+			{
+				DistributedSetEntry<TValue>(operationId, key, entry, options, token);
+			}
 		}
-		else
-		{
-			// EVENT
-			_events.OnMiss(operationId, key, activity);
-		}
+		// EVENT
+		_events.OnMiss(operationId, key, activity);
+		_events.OnSet(operationId, key);
+	}
+	else if (entry is not null)
+	{
+		// EVENT
+		_events.OnHit(operationId, key, isStale || entry.IsStale(), activity);
+	}
+	else
+	{
+		// EVENT
+		_events.OnMiss(operationId, key, activity);
+	}
 
-		return entry;
+	if (cascadeNeeded)
+	{
+		var cascadeOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+		cascadeOptions.SkipBackplaneNotifications = true;
+		if (_options.Cascade.CascadeToL2 == false)
+		{
+			cascadeOptions.SkipDistributedCacheWrite = true;
+		}
+		int total = 0;
+		CascadeInvalidateChildren(key, 0, ref total, cascadeOptions, token);
+	}
+
+	return entry;
 	}
 
 	/// <inheritdoc/>
@@ -711,17 +753,47 @@ public partial class FusionCache
 		{
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
-
+			bool cascadeNeeded = true;
+			if (_options.Cascade.ParentValueComparer is not null)
+			{
+				var existing = _mca.GetEntryOrNull(operationId, key);
+				if (existing is not null)
+				{
+					try
+					{
+						var oldVal = existing.GetValue<TValue>();
+						if (_options.Cascade.ParentValueComparer.Equals(oldVal, value))
+						{
+							cascadeNeeded = false;
+						}
+					}
+					catch
+					{
+						// ignore
+					}
+				}
+			}
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
 			}
-
 			if (RequiresDistributedOperations(options))
 			{
 				DistributedSetEntry<TValue>(operationId, key, entry, options, token);
 			}
-
+			if (options.Dependencies is not null)
+			{
+				ApplyDependencies(key, options.Dependencies);
+			}
+			if (cascadeNeeded)
+			{
+				var cascadeOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+				cascadeOptions.SkipBackplaneNotifications = true;
+				if (_options.Cascade.CascadeToL2 == false)
+					cascadeOptions.SkipDistributedCacheWrite = true;
+				int total = 0;
+				CascadeInvalidateChildren(key, 0, ref total, cascadeOptions, token);
+			}
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -757,6 +829,16 @@ public partial class FusionCache
 				DistributedRemoveEntry(operationId, key, options, token);
 			}
 
+			// CASCADE REMOVE CHILDREN IF ANY
+			var cascadeOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+			cascadeOptions.SkipBackplaneNotifications = true;
+			if (_options.Cascade.CascadeToL2 == false)
+			{
+				cascadeOptions.SkipDistributedCacheWrite = true;
+			}
+			int total = 0;
+			CascadeInvalidateChildren(key, 0, ref total, cascadeOptions, token);
+			RemoveDependencyEdgesForKey(key);
 			// EVENT
 			_events.OnRemove(operationId, key);
 		}
@@ -806,6 +888,15 @@ public partial class FusionCache
 				DistributedExpireEntry(operationId, key, options, token);
 			}
 
+			// CASCADE INVALIDATE CHILDREN IF ANY
+			var cascadeOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+			cascadeOptions.SkipBackplaneNotifications = true;
+			if (_options.Cascade.CascadeToL2 == false)
+			{
+				cascadeOptions.SkipDistributedCacheWrite = true;
+			}
+			int total = 0;
+			CascadeInvalidateChildren(key, 0, ref total, cascadeOptions, token);
 			// EVENT
 			_events.OnExpire(operationId, key);
 		}

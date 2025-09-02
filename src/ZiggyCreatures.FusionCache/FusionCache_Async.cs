@@ -317,49 +317,91 @@ public partial class FusionCache
 				}
 			}
 
-			// SAVING THE DATA IN THE MEMORY CACHE
-			if (entry is not null)
+		// SAVING THE DATA IN THE MEMORY CACHE
+		if (entry is not null)
+		{
+			if (_mca.ShouldWrite(options))
 			{
-				if (_mca.ShouldWrite(options))
-				{
-					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
-				}
+				_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+			}
+			// APPLY DEPENDENCIES IF REQUESTED
+			if (options.Dependencies is not null)
+			{
+				ApplyDependencies(key, options.Dependencies);
 			}
 		}
-		finally
-		{
-			// MEMORY LOCK
-			if (memoryLockObj is not null)
-				ReleaseMemoryLock(operationId, key, memoryLockObj);
-		}
+	}
+	finally
+	{
+		// MEMORY LOCK
+		if (memoryLockObj is not null)
+			ReleaseMemoryLock(operationId, key, memoryLockObj);
+	}
 
+	// If a new value was produced (factory ran) or we loaded a fresh value from distributed cache, we may need to cascade
+	bool cascadeNeeded = false;
+	if (entry is not null)
+	{
 		if (hasNewValue)
 		{
-			// DISTRIBUTED
-			if (entry is not null && isStale == false)
+			cascadeNeeded = true;
+		}
+		else if (_options.Cascade.ParentValueComparer is not null && memoryEntry is not null)
+		{
+			try
 			{
-				if (RequiresDistributedOperations(options))
+				var oldVal = memoryEntry.GetValue<TValue>();
+				var newVal = entry.GetValue<TValue>();
+				if (_options.Cascade.ParentValueComparer.Equals(oldVal, newVal) == false)
 				{
-					await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+					cascadeNeeded = true;
 				}
 			}
+			catch
+			{
+				cascadeNeeded = true;
+			}
+		}
+	}
 
-			// EVENT
-			_events.OnMiss(operationId, key, activity);
-			_events.OnSet(operationId, key);
-		}
-		else if (entry is not null)
+	if (hasNewValue)
+	{
+		// DISTRIBUTED
+		if (entry is not null && isStale == false)
 		{
-			// EVENT
-			_events.OnHit(operationId, key, isStale || entry.IsStale(), activity);
+			if (RequiresDistributedOperations(options))
+			{
+				await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+			}
 		}
-		else
-		{
-			// EVENT
-			_events.OnMiss(operationId, key, activity);
-		}
+		// EVENT
+		_events.OnMiss(operationId, key, activity);
+		_events.OnSet(operationId, key);
+	}
+	else if (entry is not null)
+	{
+		// EVENT
+		_events.OnHit(operationId, key, isStale || entry.IsStale(), activity);
+	}
+	else
+	{
+		// EVENT
+		_events.OnMiss(operationId, key, activity);
+	}
 
-		return entry;
+	// CASCADE INVALIDATION OF CHILDREN IF THIS KEY IS A PARENT AND VALUE CHANGED
+	if (cascadeNeeded)
+	{
+		var cascadeOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+		cascadeOptions.SkipBackplaneNotifications = true;
+		if (_options.Cascade.CascadeToL2 == false)
+		{
+			cascadeOptions.SkipDistributedCacheWrite = true;
+		}
+		await CascadeInvalidateChildrenAsync(key, 0, 0, cascadeOptions, token).ConfigureAwait(false);
+	}
+
+	return entry;
 	}
 
 	/// <inheritdoc/>
@@ -712,6 +754,28 @@ public partial class FusionCache
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
+			// Optionally detect if the parent's value actually changed to avoid unnecessary cascade
+			bool cascadeNeeded = true;
+			if (_options.Cascade.ParentValueComparer is not null)
+			{
+				var existing = _mca.GetEntryOrNull(operationId, key);
+				if (existing is not null)
+				{
+					try
+					{
+						var oldVal = existing.GetValue<TValue>();
+						if (_options.Cascade.ParentValueComparer.Equals(oldVal, value))
+						{
+							cascadeNeeded = false;
+						}
+					}
+					catch
+					{
+						// ignore type issues
+					}
+				}
+			}
+
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
@@ -720,6 +784,24 @@ public partial class FusionCache
 			if (RequiresDistributedOperations(options))
 			{
 				await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+			}
+
+			// APPLY DEPENDENCIES (if any)
+			if (options.Dependencies is not null)
+			{
+				ApplyDependencies(key, options.Dependencies);
+			}
+
+			// CASCADE INVALIDATE CHILDREN IF THIS KEY IS A PARENT
+			if (cascadeNeeded)
+			{
+				var cascadeOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+				cascadeOptions.SkipBackplaneNotifications = true;
+				if (_options.Cascade.CascadeToL2 == false)
+				{
+					cascadeOptions.SkipDistributedCacheWrite = true;
+				}
+				await CascadeInvalidateChildrenAsync(key, 0, 0, cascadeOptions, token).ConfigureAwait(false);
 			}
 
 			// EVENT
@@ -756,6 +838,17 @@ public partial class FusionCache
 			{
 				await DistributedRemoveEntryAsync(operationId, key, options, token).ConfigureAwait(false);
 			}
+
+			// CASCADE REMOVE CHILDREN IF ANY
+			var cascadeOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+			cascadeOptions.SkipBackplaneNotifications = true;
+			if (_options.Cascade.CascadeToL2 == false)
+			{
+				cascadeOptions.SkipDistributedCacheWrite = true;
+			}
+			await CascadeInvalidateChildrenAsync(key, 0, 0, cascadeOptions, token).ConfigureAwait(false);
+			// Remove edges for this key itself
+			RemoveDependencyEdgesForKey(key);
 
 			// EVENT
 			_events.OnRemove(operationId, key);
@@ -806,6 +899,14 @@ public partial class FusionCache
 				await DistributedExpireEntryAsync(operationId, key, options, token).ConfigureAwait(false);
 			}
 
+			// CASCADE INVALIDATE CHILDREN IF ANY
+			var cascadeOptions = _cascadeRemoveByTagEntryOptions.Duplicate();
+			cascadeOptions.SkipBackplaneNotifications = true;
+			if (_options.Cascade.CascadeToL2 == false)
+			{
+				cascadeOptions.SkipDistributedCacheWrite = true;
+			}
+			await CascadeInvalidateChildrenAsync(key, 0, 0, cascadeOptions, token).ConfigureAwait(false);
 			// EVENT
 			_events.OnExpire(operationId, key);
 		}

@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
@@ -60,7 +62,7 @@ public sealed partial class FusionCache
 
 	// TAGGING
 	private readonly FusionCacheEntryOptions _tagsDefaultEntryOptions;
-	private readonly FusionCacheEntryOptions _cascadeRemoveByTagEntryOptions;
+	internal readonly FusionCacheEntryOptions _cascadeRemoveByTagEntryOptions;
 
 	internal readonly string TagInternalCacheKeyPrefix;
 
@@ -73,6 +75,11 @@ public sealed partial class FusionCache
 	internal readonly string ClearExpireTagCacheKey;
 	internal readonly string ClearExpireTagInternalCacheKey;
 	internal long ClearExpireTimestamp;
+
+	// DEPENDENCIES GRAPH
+	private readonly Dictionary<string, HashSet<string>> _parentToChildren = new(StringComparer.Ordinal);
+	private readonly Dictionary<string, HashSet<string>> _childToParents = new(StringComparer.Ordinal);
+	private readonly object _dependencyLock = new();
 
 	/// <summary>
 	/// Creates a new <see cref="FusionCache"/> instance.
@@ -626,6 +633,187 @@ public sealed partial class FusionCache
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling ExpireMemoryEntryInternal (timestampThreshold={TimestampThreshold})", CacheName, InstanceId, operationId, key, timestampThreshold);
 
 		_mca.ExpireEntry(operationId, key, timestampThreshold);
+	}
+
+	// DEPENDENCY GRAPH OPERATIONS
+
+	private bool WouldCreateCycle(string parentKey, string childKey)
+	{
+		// if adding parentKey→childKey would introduce a cycle because parentKey is already reachable from childKey
+		if (parentKey == childKey)
+			return true;
+		var toVisit = new Stack<string>();
+		var visited = new HashSet<string>(StringComparer.Ordinal);
+		toVisit.Push(childKey);
+		while (toVisit.Count > 0)
+		{
+			var current = toVisit.Pop();
+			if (!visited.Add(current))
+				continue;
+			if (_childToParents.TryGetValue(current, out var parents))
+			{
+				foreach (var p in parents)
+				{
+					if (p == parentKey)
+						return true;
+					toVisit.Push(p);
+				}
+			}
+		}
+		return false;
+	}
+
+	private void ApplyDependencies(string key, DependencyBuilder builder)
+	{
+		lock (_dependencyLock)
+		{
+			// Child depends on these parents
+			if (builder.ParentKeys.Count > 0)
+			{
+				// Remove any existing edges for this child
+				if (_childToParents.TryGetValue(key, out var existingParents))
+				{
+					foreach (var parent in existingParents)
+					{
+						if (_parentToChildren.TryGetValue(parent, out var children))
+						{
+							children.Remove(key);
+							if (children.Count == 0)
+								_parentToChildren.Remove(parent);
+						}
+					}
+					_childToParents.Remove(key);
+				}
+				foreach (var parent in builder.ParentKeys)
+				{
+					if (WouldCreateCycle(parent, key))
+						throw new FusionCacheDependencyCycleException($"Adding dependency {parent}->{key} would create a cycle");
+					if (!_parentToChildren.TryGetValue(parent, out var children))
+					{
+						children = new HashSet<string>(StringComparer.Ordinal);
+						_parentToChildren[parent] = children;
+					}
+					children.Add(key);
+					if (!_childToParents.TryGetValue(key, out var parents))
+					{
+						parents = new HashSet<string>(StringComparer.Ordinal);
+						_childToParents[key] = parents;
+					}
+					parents.Add(parent);
+				}
+			}
+			// This entry is parent of these child keys
+			if (builder.ChildKeys.Count > 0)
+			{
+				foreach (var child in builder.ChildKeys)
+				{
+					if (WouldCreateCycle(key, child))
+						throw new FusionCacheDependencyCycleException($"Adding dependency {key}->{child} would create a cycle");
+					if (!_parentToChildren.TryGetValue(key, out var children))
+					{
+						children = new HashSet<string>(StringComparer.Ordinal);
+						_parentToChildren[key] = children;
+					}
+					children.Add(child);
+					if (!_childToParents.TryGetValue(child, out var parents))
+					{
+						parents = new HashSet<string>(StringComparer.Ordinal);
+						_childToParents[child] = parents;
+					}
+					parents.Add(key);
+				}
+			}
+		}
+	}
+
+	internal void RemoveDependencyEdgesForKey(string key)
+	{
+		lock (_dependencyLock)
+		{
+			if (_parentToChildren.TryGetValue(key, out var children))
+			{
+				foreach (var child in children)
+				{
+					if (_childToParents.TryGetValue(child, out var parents))
+					{
+						parents.Remove(key);
+						if (parents.Count == 0)
+							_childToParents.Remove(child);
+					}
+				}
+				_parentToChildren.Remove(key);
+			}
+			if (_childToParents.TryGetValue(key, out var parentsList))
+			{
+				foreach (var parent in parentsList)
+				{
+					if (_parentToChildren.TryGetValue(parent, out var children2))
+					{
+						children2.Remove(key);
+						if (children2.Count == 0)
+							_parentToChildren.Remove(parent);
+					}
+				}
+				_childToParents.Remove(key);
+			}
+		}
+	}
+
+	internal async ValueTask<int> CascadeInvalidateChildrenAsync(string parentKey, int depth, int totalCount, FusionCacheEntryOptions cascadeOptions, CancellationToken token)
+	{
+		if (depth >= _options.Cascade.MaxCascadeDepth)
+			return totalCount;
+		string[]? snapshot;
+		lock (_dependencyLock)
+		{
+			if (!_parentToChildren.TryGetValue(parentKey, out var children) || children.Count == 0)
+				return totalCount;
+			snapshot = children.ToArray();
+		}
+		foreach (var child in snapshot)
+		{
+			if (totalCount >= _options.Cascade.MaxCascadeFanout)
+				return totalCount;
+			totalCount++;
+			if (_options.Cascade.NotifyChildFactory)
+			{
+				await ExpireInternalAsync(child, cascadeOptions, token).ConfigureAwait(false);
+			}
+			else
+			{
+				await RemoveInternalAsync(child, cascadeOptions, token).ConfigureAwait(false);
+			}
+			totalCount = await CascadeInvalidateChildrenAsync(child, depth + 1, totalCount, cascadeOptions, token).ConfigureAwait(false);
+		}
+		return totalCount;
+	}
+
+	internal void CascadeInvalidateChildren(string parentKey, int depth, ref int totalCount, FusionCacheEntryOptions cascadeOptions, CancellationToken token)
+	{
+		if (depth >= _options.Cascade.MaxCascadeDepth)
+			return;
+		string[]? snapshot;
+		lock (_dependencyLock)
+		{
+			if (!_parentToChildren.TryGetValue(parentKey, out var children) || children.Count == 0)
+				return;
+			snapshot = children.ToArray();
+		}
+		foreach (var child in snapshot)
+		{
+			if (totalCount >= _options.Cascade.MaxCascadeFanout)
+				return;
+			totalCount++;
+			if (_options.Cascade.NotifyChildFactory)
+			{
+				ExpireInternal(child, cascadeOptions, token);
+			}
+			else
+			{
+				RemoveInternal(child, cascadeOptions, token);
+			}
+			CascadeInvalidateChildren(child, depth + 1, ref totalCount, cascadeOptions, token);
+		}
 	}
 
 	// TAGGING

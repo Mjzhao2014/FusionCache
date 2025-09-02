@@ -286,6 +286,14 @@ internal partial class BackplaneAccessor
 				{
 					// HANDLE SET
 					await HandleIncomingMessageSetAsync(operationId, message).ConfigureAwait(false);
+					// Invalidate any dependent children for this key locally
+					var cascadeOptions = _cache._cascadeRemoveByTagEntryOptions.Duplicate();
+					cascadeOptions.SkipBackplaneNotifications = true;
+					if (_options.Cascade.CascadeToL2 == false)
+					{
+						cascadeOptions.SkipDistributedCacheWrite = true;
+					}
+					await _cache.CascadeInvalidateChildrenAsync(message.CacheKey!, 0, 0, cascadeOptions, default).ConfigureAwait(false);
 				}
 
 				break;
@@ -295,6 +303,17 @@ internal partial class BackplaneAccessor
 
 				// HANDLE REMOVE
 				_cache.RemoveMemoryEntryInternal(operationId, message.CacheKey!);
+				// Cascade remove any dependent children locally
+				{
+					var cascadeOptions = _cache._cascadeRemoveByTagEntryOptions.Duplicate();
+					cascadeOptions.SkipBackplaneNotifications = true;
+					if (_options.Cascade.CascadeToL2 == false)
+					{
+						cascadeOptions.SkipDistributedCacheWrite = true;
+					}
+					await _cache.CascadeInvalidateChildrenAsync(message.CacheKey!, 0, 0, cascadeOptions, default).ConfigureAwait(false);
+					_cache.RemoveDependencyEdgesForKey(message.CacheKey!);
+				}
 				break;
 			case BackplaneMessageAction.EntryExpire:
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -302,6 +321,16 @@ internal partial class BackplaneAccessor
 
 				// HANDLE EXPIRE
 				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
+				// Cascade invalidate any dependent children locally
+				{
+					var cascadeOptions = _cache._cascadeRemoveByTagEntryOptions.Duplicate();
+					cascadeOptions.SkipBackplaneNotifications = true;
+					if (_options.Cascade.CascadeToL2 == false)
+					{
+						cascadeOptions.SkipDistributedCacheWrite = true;
+					}
+					await _cache.CascadeInvalidateChildrenAsync(message.CacheKey!, 0, 0, cascadeOptions, default).ConfigureAwait(false);
+				}
 				break;
 			default:
 				// HANDLE UNKNOWN: DO NOTHING

@@ -286,6 +286,15 @@ internal partial class BackplaneAccessor
 				{
 					// HANDLE SET
 					HandleIncomingMessageSet(operationId, message);
+					// Cascade invalidate any dependent children locally
+					var cascadeOptions = _cache._cascadeRemoveByTagEntryOptions.Duplicate();
+					cascadeOptions.SkipBackplaneNotifications = true;
+					if (_options.Cascade.CascadeToL2 == false)
+					{
+						cascadeOptions.SkipDistributedCacheWrite = true;
+					}
+					int total = 0;
+					_cache.CascadeInvalidateChildren(message.CacheKey!, 0, ref total, cascadeOptions, default);
 				}
 
 				break;
@@ -295,6 +304,18 @@ internal partial class BackplaneAccessor
 
 				// HANDLE REMOVE
 				_cache.RemoveMemoryEntryInternal(operationId, message.CacheKey!);
+				// Cascade remove dependent children locally
+				{
+					var cascadeOptions = _cache._cascadeRemoveByTagEntryOptions.Duplicate();
+					cascadeOptions.SkipBackplaneNotifications = true;
+					if (_options.Cascade.CascadeToL2 == false)
+					{
+						cascadeOptions.SkipDistributedCacheWrite = true;
+					}
+					int total = 0;
+					_cache.CascadeInvalidateChildren(message.CacheKey!, 0, ref total, cascadeOptions, default);
+					_cache.RemoveDependencyEdgesForKey(message.CacheKey!);
+				}
 				break;
 			case BackplaneMessageAction.EntryExpire:
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -302,6 +323,17 @@ internal partial class BackplaneAccessor
 
 				// HANDLE EXPIRE
 				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
+				// Cascade expire dependent children locally
+				{
+					var cascadeOptions = _cache._cascadeRemoveByTagEntryOptions.Duplicate();
+					cascadeOptions.SkipBackplaneNotifications = true;
+					if (_options.Cascade.CascadeToL2 == false)
+					{
+						cascadeOptions.SkipDistributedCacheWrite = true;
+					}
+					int total = 0;
+					_cache.CascadeInvalidateChildren(message.CacheKey!, 0, ref total, cascadeOptions, default);
+				}
 				break;
 			default:
 				// HANDLE UNKNOWN: DO NOTHING

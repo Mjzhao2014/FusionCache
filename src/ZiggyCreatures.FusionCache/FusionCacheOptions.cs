@@ -250,6 +250,11 @@ public class FusionCacheOptions
 	public bool IgnoreIncomingBackplaneNotifications { get; set; }
 
 	/// <summary>
+	/// Options that control how dependency cascades are handled when invalidating children on parent updates.
+	/// </summary>
+	public CascadeOptions Cascade { get; } = new();
+
+	/// <summary>
 	/// When AutoClone is enabled, skips it anyway for immutable objects.
 	/// <br/><br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/AutoClone.md"/>
@@ -598,7 +603,12 @@ public class FusionCacheOptions
 
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
 		};
-
+		// COPY CASCADE OPTIONS
+		res.Cascade.CascadeToL2 = Cascade.CascadeToL2;
+		res.Cascade.MaxCascadeDepth = Cascade.MaxCascadeDepth;
+		res.Cascade.MaxCascadeFanout = Cascade.MaxCascadeFanout;
+		res.Cascade.NotifyChildFactory = Cascade.NotifyChildFactory;
+		res.Cascade.ParentValueComparer = Cascade.ParentValueComparer;
 		return res;
 	}
 
