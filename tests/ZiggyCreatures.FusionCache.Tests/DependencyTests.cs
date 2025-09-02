@@ -579,8 +579,8 @@ public class DependencyTests : AbstractTests
 
 		// Clear by parent tag - should remove both parent and child
 		cache.RemoveByTag("parent-tag");
-		Assert.Null(cache.GetOrDefault<string>("tagged-parent"));
 		Assert.Null(cache.GetOrDefault<string>("tagged-child"));
+		Assert.Null(cache.GetOrDefault<string>("tagged-parent"));
 	}
 
 	[Fact]
