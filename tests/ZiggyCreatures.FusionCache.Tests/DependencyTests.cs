@@ -144,18 +144,70 @@ public class DependencyTests : AbstractTests
 		// Set parent
 		cache.Set("parent:config", "config-value");
 
-		// Use GetOrSet with dependencies
-		var result = cache.GetOrSet("derived:config",
+		// SCENARIO 1: Fresh insert - GetOrSet creates new entry with dependencies
+		var result1 = cache.GetOrSet("derived:config", 
 			_ => "derived-config-value",
 			options => options
 				.SetDuration(TimeSpan.FromMinutes(5))
 				.WithDependencies(DependsOn.Keys("parent:config")));
 
-		Assert.Equal("derived-config-value", result);
+		Assert.Equal("derived-config-value", result1);
 
-		// Verify dependency works
+		// Verify dependency works for fresh insert
 		cache.Set("parent:config", "new-config-value");
 		Assert.Null(cache.GetOrDefault<string>("derived:config"));
+
+		// SCENARIO 2: Cache hit - GetOrSet on existing entry should still register dependencies
+		// First, re-add the entries without dependencies
+		cache.Set("parent:config2", "config2-value");
+		cache.Set("derived:config2", "existing-value"); // Pre-existing entry without dependencies
+
+		// Verify the entry exists and has no dependencies initially
+		Assert.Equal("existing-value", cache.GetOrDefault<string>("derived:config2"));
+
+		// Now call GetOrSet on the existing entry with dependencies
+		var result2 = cache.GetOrSet("derived:config2",
+			_ => "should-not-be-called", // Factory should not be called since entry exists
+			options => options
+				.SetDuration(TimeSpan.FromMinutes(5))
+				.WithDependencies(DependsOn.Keys("parent:config2")));
+
+		// Should return existing value (factory not called)
+		Assert.Equal("existing-value", result2);
+
+		// CRITICAL TEST: Verify dependency was registered even on cache hit
+		cache.Set("parent:config2", "updated-config2-value");
+		Assert.Null(cache.GetOrDefault<string>("derived:config2")); // Should be invalidated if dependency was registered
+
+		// SCENARIO 3: Test dependency update on existing entry
+		cache.Set("parent:config3a", "config3a-value");
+		cache.Set("parent:config3b", "config3b-value");
+		
+		// Create entry with initial dependency
+		var result3a = cache.GetOrSet("derived:config3",
+			_ => "derived-config3-value",
+			options => options
+				.SetDuration(TimeSpan.FromMinutes(5))
+				.WithDependencies(DependsOn.Keys("parent:config3a")));
+
+		Assert.Equal("derived-config3-value", result3a);
+
+		// Update dependencies on existing entry (should replace old dependencies)
+		var result3b = cache.GetOrSet("derived:config3",
+			_ => "should-not-be-called",
+			options => options
+				.SetDuration(TimeSpan.FromMinutes(5))
+				.WithDependencies(DependsOn.Keys("parent:config3b"))); // Different parent
+
+		Assert.Equal("derived-config3-value", result3b); // Same value returned
+
+		// Old dependency should no longer work
+		cache.Set("parent:config3a", "updated-config3a-value");
+		Assert.NotNull(cache.GetOrDefault<string>("derived:config3")); // Should NOT be invalidated
+
+		// New dependency should work
+		cache.Set("parent:config3b", "updated-config3b-value");
+		Assert.Null(cache.GetOrDefault<string>("derived:config3")); // Should be invalidated
 	}
 
 	[Fact]
@@ -166,10 +218,9 @@ public class DependencyTests : AbstractTests
 		// Set parent
 		await cache.SetAsync("parent:settings", "settings-value");
 
-		// Use GetOrSetAsync with dependencies
-		var result = await cache.GetOrSetAsync("derived:settings",
-			async _ =>
-			{
+		// SCENARIO 1: Fresh insert - GetOrSetAsync creates new entry with dependencies
+		var result1 = await cache.GetOrSetAsync("derived:settings",
+			async _ => {
 				await Task.Delay(10); // Simulate async work
 				return "derived-settings-value";
 			},
@@ -177,11 +228,72 @@ public class DependencyTests : AbstractTests
 				.SetDuration(TimeSpan.FromMinutes(5))
 				.WithDependencies(DependsOn.Keys("parent:settings")));
 
-		Assert.Equal("derived-settings-value", result);
+		Assert.Equal("derived-settings-value", result1);
 
-		// Verify dependency works
+		// Verify dependency works for fresh insert
 		await cache.SetAsync("parent:settings", "new-settings-value");
 		Assert.Null(await cache.GetOrDefaultAsync<string>("derived:settings"));
+
+		// SCENARIO 2: Cache hit - GetOrSetAsync on existing entry should still register dependencies
+		// First, re-add the entries without dependencies
+		await cache.SetAsync("parent:settings2", "settings2-value");
+		await cache.SetAsync("derived:settings2", "existing-settings-value"); // Pre-existing entry without dependencies
+
+		// Verify the entry exists and has no dependencies initially
+		Assert.Equal("existing-settings-value", await cache.GetOrDefaultAsync<string>("derived:settings2"));
+
+		// Now call GetOrSetAsync on the existing entry with dependencies
+		var result2 = await cache.GetOrSetAsync("derived:settings2",
+			async _ => {
+				await Task.Delay(10);
+				return "should-not-be-called"; // Factory should not be called since entry exists
+			},
+			options => options
+				.SetDuration(TimeSpan.FromMinutes(5))
+				.WithDependencies(DependsOn.Keys("parent:settings2")));
+
+		// Should return existing value (factory not called)
+		Assert.Equal("existing-settings-value", result2);
+
+		// CRITICAL TEST: Verify dependency was registered even on cache hit
+		await cache.SetAsync("parent:settings2", "updated-settings2-value");
+		Assert.Null(await cache.GetOrDefaultAsync<string>("derived:settings2")); // Should be invalidated if dependency was registered
+
+		// SCENARIO 3: Test dependency update on existing entry
+		await cache.SetAsync("parent:settings3a", "settings3a-value");
+		await cache.SetAsync("parent:settings3b", "settings3b-value");
+		
+		// Create entry with initial dependency
+		var result3a = await cache.GetOrSetAsync("derived:settings3",
+			async _ => {
+				await Task.Delay(10);
+				return "derived-settings3-value";
+			},
+			options => options
+				.SetDuration(TimeSpan.FromMinutes(5))
+				.WithDependencies(DependsOn.Keys("parent:settings3a")));
+
+		Assert.Equal("derived-settings3-value", result3a);
+
+		// Update dependencies on existing entry (should replace old dependencies)
+		var result3b = await cache.GetOrSetAsync("derived:settings3",
+			async _ => {
+				await Task.Delay(10);
+				return "should-not-be-called";
+			},
+			options => options
+				.SetDuration(TimeSpan.FromMinutes(5))
+				.WithDependencies(DependsOn.Keys("parent:settings3b"))); // Different parent
+
+		Assert.Equal("derived-settings3-value", result3b); // Same value returned
+
+		// Old dependency should no longer work
+		await cache.SetAsync("parent:settings3a", "updated-settings3a-value");
+		Assert.NotNull(await cache.GetOrDefaultAsync<string>("derived:settings3")); // Should NOT be invalidated
+
+		// New dependency should work
+		await cache.SetAsync("parent:settings3b", "updated-settings3b-value");
+		Assert.Null(await cache.GetOrDefaultAsync<string>("derived:settings3")); // Should be invalidated
 	}
 
 	[Fact]
