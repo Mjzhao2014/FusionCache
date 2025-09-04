@@ -368,6 +368,219 @@ public class DependencyTests : AbstractTests
 	}
 
 	[Fact]
+	public void ExpireEntry_RemovesDependenciesAndCascades_CleansDependencyGraphAndPreventsStaleReferences()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// SCENARIO 1: Simple one-parent case (current test)
+		// Set up initial dependency: parent -> child
+		cache.Set("parent", "parent-value");
+		cache.Set("child", "child-value", options => options
+			.WithDependencies(DependsOn.Keys("parent")));
+
+		// Verify initial state
+		Assert.Equal("parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("child-value", cache.GetOrDefault<string>("child"));
+
+		// Expire parent - this should cascade to child AND clean up dependency graph
+		cache.Expire("parent");
+
+		// Both should be gone
+		Assert.Null(cache.GetOrDefault<string>("parent"));
+		Assert.Null(cache.GetOrDefault<string>("child"));
+
+		// Now re-add the same keys WITHOUT dependencies
+		cache.Set("parent", "new-parent-value");
+		cache.Set("child", "new-child-value");
+
+		// Verify they exist
+		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
+
+		// Update parent again - this should NOT affect child since dependency was cleaned up
+		cache.Set("parent", "updated-parent-value");
+
+		// Child should still exist (proving no stale dependency)
+		Assert.Equal("updated-parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
+
+		// SCENARIO 2: Multiple-parents case to test complete cleanup
+		// Set up a child with multiple parents
+		cache.Set("parent1", "parent1-value");
+		cache.Set("parent2", "parent2-value");
+		cache.Set("multi-child", "multi-child-value", options => options
+			.WithDependencies(DependsOn.Keys("parent1", "parent2")));
+
+		// Verify all exist
+		Assert.Equal("parent1-value", cache.GetOrDefault<string>("parent1"));
+		Assert.Equal("parent2-value", cache.GetOrDefault<string>("parent2"));
+		Assert.Equal("multi-child-value", cache.GetOrDefault<string>("multi-child"));
+
+		// Expire one parent - this should cascade to child and clean up ALL dependency edges for the child
+		cache.Expire("parent1");
+
+		// Parent1 and child should be gone
+		Assert.Null(cache.GetOrDefault<string>("parent1"));
+		Assert.Null(cache.GetOrDefault<string>("multi-child"));
+		// Parent2 should still exist
+		Assert.Equal("parent2-value", cache.GetOrDefault<string>("parent2"));
+
+		// Re-add the child WITHOUT any dependencies
+		cache.Set("multi-child", "new-multi-child-value");
+		Assert.Equal("new-multi-child-value", cache.GetOrDefault<string>("multi-child"));
+
+		// Update parent2 - this should NOT affect the new child if dependency cleanup was complete
+		// This test will FAIL if stale references remain in the dependency graph
+		cache.Set("parent2", "updated-parent2-value");
+
+		// Child should still exist (proving no stale dependency from parent2)
+		Assert.Equal("updated-parent2-value", cache.GetOrDefault<string>("parent2"));
+		Assert.Equal("new-multi-child-value", cache.GetOrDefault<string>("multi-child"));
+	}
+
+	[Fact]
+	public async Task RemoveAsyncEntry_RemovesDependenciesAndCascades_CleansDependencyGraphAndPreventsStaleReferences()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// SCENARIO 1: Simple one-parent case (current test)
+		// Set up initial dependency: parent -> child
+		cache.Set("parent", "parent-value");
+		cache.Set("child", "child-value", options => options
+			.WithDependencies(DependsOn.Keys("parent")));
+
+		// Verify initial state
+		Assert.Equal("parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("child-value", cache.GetOrDefault<string>("child"));
+
+		// Remove parent - this should cascade to child AND clean up dependency graph
+		await cache.RemoveAsync("parent");
+
+		// Both should be gone
+		Assert.Null(cache.GetOrDefault<string>("parent"));
+		Assert.Null(cache.GetOrDefault<string>("child"));
+
+		// Now re-add the same keys WITHOUT dependencies
+		cache.Set("parent", "new-parent-value");
+		cache.Set("child", "new-child-value");
+
+		// Verify they exist
+		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
+
+		// Update parent again - this should NOT affect child since dependency was cleaned up
+		cache.Set("parent", "updated-parent-value");
+
+		// Child should still exist (proving no stale dependency)
+		Assert.Equal("updated-parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
+
+		// SCENARIO 2: Multiple-parents case to test complete cleanup
+		// Set up a child with multiple parents
+		cache.Set("parent1", "parent1-value");
+		cache.Set("parent2", "parent2-value");
+		cache.Set("multi-child", "multi-child-value", options => options
+			.WithDependencies(DependsOn.Keys("parent1", "parent2")));
+
+		// Verify all exist
+		Assert.Equal("parent1-value", cache.GetOrDefault<string>("parent1"));
+		Assert.Equal("parent2-value", cache.GetOrDefault<string>("parent2"));
+		Assert.Equal("multi-child-value", cache.GetOrDefault<string>("multi-child"));
+
+		// Remove one parent - this should cascade to child and clean up ALL dependency edges for the child
+		await cache.RemoveAsync("parent1");
+
+		// Parent1 and child should be gone
+		Assert.Null(cache.GetOrDefault<string>("parent1"));
+		Assert.Null(cache.GetOrDefault<string>("multi-child"));
+		// Parent2 should still exist
+		Assert.Equal("parent2-value", cache.GetOrDefault<string>("parent2"));
+
+		// Re-add the child WITHOUT any dependencies
+		cache.Set("multi-child", "new-multi-child-value");
+		Assert.Equal("new-multi-child-value", cache.GetOrDefault<string>("multi-child"));
+
+		// Update parent2 - this should NOT affect the new child if dependency cleanup was complete
+		// This test will FAIL if stale references remain in the dependency graph
+		cache.Set("parent2", "updated-parent2-value");
+
+		// Child should still exist (proving no stale dependency from parent2)
+		Assert.Equal("updated-parent2-value", cache.GetOrDefault<string>("parent2"));
+		Assert.Equal("new-multi-child-value", cache.GetOrDefault<string>("multi-child"));
+	}
+
+	[Fact]
+	public async Task ExpireAsyncEntry_RemovesDependenciesAndCascades_CleansDependencyGraphAndPreventsStaleReferences()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions());
+
+		// SCENARIO 1: Simple one-parent case (current test)
+		// Set up initial dependency: parent -> child
+		cache.Set("parent", "parent-value");
+		cache.Set("child", "child-value", options => options
+			.WithDependencies(DependsOn.Keys("parent")));
+
+		// Verify initial state
+		Assert.Equal("parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("child-value", cache.GetOrDefault<string>("child"));
+
+		// Expire parent - this should cascade to child AND clean up dependency graph
+		await cache.ExpireAsync("parent");
+
+		// Both should be gone
+		Assert.Null(cache.GetOrDefault<string>("parent"));
+		Assert.Null(cache.GetOrDefault<string>("child"));
+
+		// Now re-add the same keys WITHOUT dependencies
+		cache.Set("parent", "new-parent-value");
+		cache.Set("child", "new-child-value");
+
+		// Verify they exist
+		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
+
+		// Update parent again - this should NOT affect child since dependency was cleaned up
+		cache.Set("parent", "updated-parent-value");
+
+		// Child should still exist (proving no stale dependency)
+		Assert.Equal("updated-parent-value", cache.GetOrDefault<string>("parent"));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("child"));
+
+		// SCENARIO 2: Multiple-parents case to test complete cleanup
+		// Set up a child with multiple parents
+		cache.Set("parent1", "parent1-value");
+		cache.Set("parent2", "parent2-value");
+		cache.Set("multi-child", "multi-child-value", options => options
+			.WithDependencies(DependsOn.Keys("parent1", "parent2")));
+
+		// Verify all exist
+		Assert.Equal("parent1-value", cache.GetOrDefault<string>("parent1"));
+		Assert.Equal("parent2-value", cache.GetOrDefault<string>("parent2"));
+		Assert.Equal("multi-child-value", cache.GetOrDefault<string>("multi-child"));
+
+		// Expire one parent - this should cascade to child and clean up ALL dependency edges for the child
+		await cache.ExpireAsync("parent1");
+
+		// Parent1 and child should be gone
+		Assert.Null(cache.GetOrDefault<string>("parent1"));
+		Assert.Null(cache.GetOrDefault<string>("multi-child"));
+		// Parent2 should still exist
+		Assert.Equal("parent2-value", cache.GetOrDefault<string>("parent2"));
+
+		// Re-add the child WITHOUT any dependencies
+		cache.Set("multi-child", "new-multi-child-value");
+		Assert.Equal("new-multi-child-value", cache.GetOrDefault<string>("multi-child"));
+
+		// Update parent2 - this should NOT affect the new child if dependency cleanup was complete
+		// This test will FAIL if stale references remain in the dependency graph
+		cache.Set("parent2", "updated-parent2-value");
+
+		// Child should still exist (proving no stale dependency from parent2)
+		Assert.Equal("updated-parent2-value", cache.GetOrDefault<string>("parent2"));
+		Assert.Equal("new-multi-child-value", cache.GetOrDefault<string>("multi-child"));
+	}
+
+	[Fact]
 	public void CascadeDepthLimit_PreventsInfiniteRecursion()
 	{
 		var options = new FusionCacheOptions();
