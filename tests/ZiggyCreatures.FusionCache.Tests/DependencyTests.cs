@@ -801,6 +801,7 @@ public class DependencyTests : AbstractTests
 		using var cache = new FusionCache(options);
 		cache.SetupDistributedCache(distributedCache, serializer);
 
+		// Scenario 1: Update parent, CascadeToL2 is false, so L2 child should remain
 		// Set parent and child
 		cache.Set("no-l2-parent", "parent-value", options => options.SetDuration(TimeSpan.FromMinutes(10)));
 		cache.Set("no-l2-child", "child-value", options => options
@@ -819,6 +820,16 @@ public class DependencyTests : AbstractTests
 		Assert.Null(cache.GetOrDefault<string>("no-l2-child"));
 		// Parent should have new value
 		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("no-l2-parent"));
+
+		// Scenario 2 : Remove parent, CascadeToL2 is false, so L2 child should remain
+		cache.Set("no-l2-child", "new-child-value", options => options
+			.SetDuration(TimeSpan.FromMinutes(10))
+			.WithDependencies(DependsOn.Keys("no-l2-parent")));
+		Assert.Equal("new-child-value", cache.GetOrDefault<string>("no-l2-child"));
+
+		cache.Remove("no-l2-parent");
+		Assert.Null(cache.GetOrDefault<string>("no-l2-child"));
+		Assert.NotNull(distributedCache.GetString("no-l2-child"));
 	}
 
 	[Fact]
