@@ -295,6 +295,8 @@ internal partial class BackplaneAccessor
 
 				// HANDLE REMOVE
 				_cache.RemoveMemoryEntryInternal(operationId, message.CacheKey!);
+				_cache.RemoveEdgesForKey(message.CacheKey!);
+				_cache.CascadeInvalidate(message.CacheKey!);
 				break;
 			case BackplaneMessageAction.EntryExpire:
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
@@ -302,6 +304,8 @@ internal partial class BackplaneAccessor
 
 				// HANDLE EXPIRE
 				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
+				// CASCADE INVALIDATION TO DEPENDENT CHILDREN
+				_cache.CascadeInvalidate(message.CacheKey!);
 				break;
 			default:
 				// HANDLE UNKNOWN: DO NOTHING

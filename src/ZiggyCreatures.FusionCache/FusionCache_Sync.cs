@@ -344,6 +344,12 @@ public partial class FusionCache
 				}
 			}
 
+			// MERGE DEPENDENCY GRAPH
+			AddDependenciesForKey(key, options.Dependencies);
+
+			// CASCADE INVALIDATION FOR PARENT CHANGES
+			CascadeInvalidate(key, token);
+
 			// EVENT
 			_events.OnMiss(operationId, key, activity);
 			_events.OnSet(operationId, key);
@@ -722,6 +728,11 @@ public partial class FusionCache
 				DistributedSetEntry<TValue>(operationId, key, entry, options, token);
 			}
 
+			// MERGE DEPENDENCY GRAPH
+			AddDependenciesForKey(key, options.Dependencies);
+			// INVALIDATE ANY CHILDREN OF THIS KEY
+			CascadeInvalidate(key, token);
+
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -735,7 +746,7 @@ public partial class FusionCache
 
 	// REMOVE
 
-	private void RemoveInternal(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+private void RemoveInternal(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool skipCascade = false)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -756,6 +767,14 @@ public partial class FusionCache
 			{
 				DistributedRemoveEntry(operationId, key, options, token);
 			}
+
+				// CLEANUP DEPENDENCY GRAPH
+				RemoveEdgesForKey(key);
+				if (skipCascade == false)
+				{
+					// CASCADE INVALIDATION TO ANY CHILDREN
+					CascadeInvalidate(key, token);
+				}
 
 			// EVENT
 			_events.OnRemove(operationId, key);
@@ -805,6 +824,9 @@ public partial class FusionCache
 			{
 				DistributedExpireEntry(operationId, key, options, token);
 			}
+
+			// CASCADE INVALIDATION TO ANY CHILDREN
+			CascadeInvalidate(key, token);
 
 			// EVENT
 			_events.OnExpire(operationId, key);

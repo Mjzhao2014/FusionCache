@@ -18,6 +18,7 @@ public class FusionCacheOptions
 	private string _cacheName;
 	private FusionCacheEntryOptions _defaultEntryOptions;
 	private FusionCacheEntryOptions _tagsDefaultEntryOptions;
+	private CascadeOptions _cascadeOptions = new();
 
 	/// <summary>
 	/// The default value for <see cref="IFusionCache.CacheName"/>.
@@ -184,6 +185,20 @@ public class FusionCacheOptions
 				throw new ArgumentNullException(nameof(value), "It is not possible to set the TagsDefaultEntryOptions to null");
 
 			_tagsDefaultEntryOptions = value;
+		}
+	}
+
+	/// <summary>
+	/// Options that control cascading invalidation of dependent entries when a parent changes.
+	/// </summary>
+	public CascadeOptions Cascade
+	{
+		get { return _cascadeOptions; }
+		set
+		{
+			if (value is null)
+				throw new ArgumentNullException(nameof(value));
+			_cascadeOptions = value;
 		}
 	}
 
@@ -549,6 +564,13 @@ public class FusionCacheOptions
 
 			DefaultEntryOptions = DefaultEntryOptions.Duplicate(),
 			TagsDefaultEntryOptions = TagsDefaultEntryOptions.Duplicate(),
+			// clone cascade options also
+			Cascade = new CascadeOptions
+			{
+				CascadeToL2 = Cascade.CascadeToL2,
+				MaxCascadeDepth = Cascade.MaxCascadeDepth,
+				MaxCascadeFanout = Cascade.MaxCascadeFanout
+			},
 
 			EnableAutoRecovery = EnableAutoRecovery,
 			AutoRecoveryDelay = AutoRecoveryDelay,

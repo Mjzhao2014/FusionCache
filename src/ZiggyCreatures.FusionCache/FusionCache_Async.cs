@@ -344,6 +344,11 @@ public partial class FusionCache
 				}
 			}
 
+			// MERGE DEPENDENCIES
+			AddDependenciesForKey(key, options.Dependencies);
+			// CASCADE INVALIDATION FOR PARENT CHANGES
+			CascadeInvalidate(key, token);
+
 			// EVENT
 			_events.OnMiss(operationId, key, activity);
 			_events.OnSet(operationId, key);
@@ -722,6 +727,12 @@ public partial class FusionCache
 				await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
 			}
 
+			// MERGE DEPENDENCY GRAPH
+			AddDependenciesForKey(key, options.Dependencies);
+
+			// CASCADE INVALIDATION FOR PARENT UPDATES
+			CascadeInvalidate(key, token);
+
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -735,7 +746,7 @@ public partial class FusionCache
 
 	// REMOVE
 
-	private async ValueTask RemoveInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default)
+private async ValueTask RemoveInternalAsync(string key, FusionCacheEntryOptions options, CancellationToken token = default, bool skipCascade = false)
 	{
 		var operationId = MaybeGenerateOperationId();
 
@@ -756,6 +767,14 @@ public partial class FusionCache
 			{
 				await DistributedRemoveEntryAsync(operationId, key, options, token).ConfigureAwait(false);
 			}
+
+				// CLEANUP DEPENDENCY GRAPH
+				RemoveEdgesForKey(key);
+				if (skipCascade == false)
+				{
+					// CASCADE INVALIDATION TO ANY CHILDREN
+					CascadeInvalidate(key, token);
+				}
 
 			// EVENT
 			_events.OnRemove(operationId, key);
@@ -805,6 +824,9 @@ public partial class FusionCache
 			{
 				await DistributedExpireEntryAsync(operationId, key, options, token).ConfigureAwait(false);
 			}
+
+			// CASCADE INVALIDATION TO CHILDREN
+			CascadeInvalidate(key, token);
 
 			// EVENT
 			_events.OnExpire(operationId, key);

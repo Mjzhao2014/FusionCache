@@ -9,13 +9,13 @@ using ZiggyCreatures.Caching.Fusion.Serialization;
 
 namespace ZiggyCreatures.Caching.Fusion;
 
-/// <summary>
-/// Represents all the options available for a single <see cref="IFusionCache"/> entry.
+	/// <summary>
+	/// Represents all the options available for a single <see cref="IFusionCache"/> entry.
 /// <br/><br/>
 /// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 /// </summary>
-public sealed class FusionCacheEntryOptions
-{
+	public sealed class FusionCacheEntryOptions
+	{
 	/// <summary>
 	/// Creates a new instance of a <see cref="FusionCacheEntryOptions"/> object.
 	/// <br/><br/>
@@ -57,6 +57,12 @@ public sealed class FusionCacheEntryOptions
 		SkipMemoryCacheRead = FusionCacheGlobalDefaults.EntryOptionsSkipMemoryCacheRead;
 		SkipMemoryCacheWrite = FusionCacheGlobalDefaults.EntryOptionsSkipMemoryCacheWrite;
 	}
+
+	/// <summary>
+	/// Optional dependency declaration to apply when this entry is set.
+	/// When non-null, any edges specified will be added when the entry is saved.
+	/// </summary>
+	internal DependencyBuilder? Dependencies { get; set; }
 
 	/// <summary>
 	/// The amount of time after which a cache entry is <strong>considered expired</strong>.
@@ -1126,7 +1132,8 @@ public sealed class FusionCacheEntryOptions
 			SkipMemoryCacheRead = SkipMemoryCacheRead,
 			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
 
-			EnableAutoClone = EnableAutoClone
+			EnableAutoClone = EnableAutoClone,
+			Dependencies = Dependencies
 		};
 	}
 

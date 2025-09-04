@@ -62,6 +62,11 @@ public sealed partial class FusionCache
 	private readonly FusionCacheEntryOptions _tagsDefaultEntryOptions;
 	private readonly FusionCacheEntryOptions _cascadeRemoveByTagEntryOptions;
 
+	// DEPENDENCY GRAPH
+	private readonly object _dependencyLock = new();
+	private readonly Dictionary<string, HashSet<string>> _parentToChildren = new();
+	private readonly Dictionary<string, HashSet<string>> _childToParents = new();
+
 	internal readonly string TagInternalCacheKeyPrefix;
 
 	internal const string ClearRemoveTag = "!";
@@ -197,6 +202,142 @@ public sealed partial class FusionCache
 		// MICRO OPTIMIZATION: WARM UP OBSERVABILITY STUFF
 		_ = Activities.Source;
 		_ = Metrics.Meter;
+	}
+
+	// DEPENDENCY GRAPH MANAGEMENT
+
+	private bool WouldCreateCycle(string parent, string child)
+	{
+		if (parent == child)
+			return true;
+		var visited = new HashSet<string>();
+		var stack = new Stack<string>();
+		stack.Push(child);
+		lock (_dependencyLock)
+		{
+			while (stack.Count > 0)
+			{
+				var current = stack.Pop();
+				if (_parentToChildren.TryGetValue(current, out var kids))
+				{
+					foreach (var k in kids)
+					{
+						if (k == parent)
+							return true;
+						if (visited.Add(k))
+							stack.Push(k);
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	private void AddEdge(string parent, string child)
+	{
+		if (WouldCreateCycle(parent, child))
+			throw new FusionCacheDependencyCycleException($"Adding a dependency from parent '{parent}' to child '{child}' would create a cycle");
+		if (_parentToChildren.TryGetValue(parent, out var childrenSet) == false)
+		{
+			childrenSet = new HashSet<string>();
+			_parentToChildren[parent] = childrenSet;
+		}
+		childrenSet.Add(child);
+		if (_childToParents.TryGetValue(child, out var parentSet) == false)
+		{
+			parentSet = new HashSet<string>();
+			_childToParents[child] = parentSet;
+		}
+		parentSet.Add(parent);
+	}
+
+	private void AddDependenciesForKey(string key, DependencyBuilder? deps)
+	{
+		if (deps is null)
+			return;
+		lock (_dependencyLock)
+		{
+			foreach (var parent in deps.ParentKeys)
+			{
+				AddEdge(parent, key);
+			}
+			foreach (var child in deps.ChildKeys)
+			{
+				AddEdge(key, child);
+			}
+		}
+	}
+
+	internal void RemoveEdgesForKey(string key)
+	{
+		lock (_dependencyLock)
+		{
+			if (_parentToChildren.TryGetValue(key, out var children))
+			{
+				_parentToChildren.Remove(key);
+				foreach (var child in children)
+				{
+					if (_childToParents.TryGetValue(child, out var parentsSet))
+					{
+						parentsSet.Remove(key);
+						if (parentsSet.Count == 0)
+							_childToParents.Remove(child);
+					}
+				}
+			}
+			if (_childToParents.TryGetValue(key, out var parents))
+			{
+				_childToParents.Remove(key);
+				foreach (var parent in parents)
+				{
+					if (_parentToChildren.TryGetValue(parent, out var kidsSet))
+					{
+						kidsSet.Remove(key);
+						if (kidsSet.Count == 0)
+							_parentToChildren.Remove(parent);
+					}
+				}
+			}
+		}
+	}
+
+	internal void CascadeInvalidate(string parentKey, CancellationToken token = default)
+	{
+		var cascadeOptions = _options.Cascade;
+		int maxDepth = cascadeOptions.MaxCascadeDepth;
+		int maxFanout = cascadeOptions.MaxCascadeFanout;
+		var processed = 0;
+		var queue = new Queue<(string key,int depth)>();
+		queue.Enqueue((parentKey, 0));
+		while (queue.Count > 0)
+		{
+			var (key, depth) = queue.Dequeue();
+			if (depth >= maxDepth)
+				continue;
+			List<string>? snapshot = null;
+			lock (_dependencyLock)
+			{
+				if (_parentToChildren.TryGetValue(key, out var childrenSet))
+					snapshot = new List<string>(childrenSet);
+			}
+			if (snapshot is null || snapshot.Count == 0)
+				continue;
+			foreach (var child in snapshot)
+			{
+				if (processed >= maxFanout)
+					return;
+				processed++;
+				var childOptions = _defaultEntryOptions;
+				if (cascadeOptions.CascadeToL2 == false)
+				{
+					childOptions = childOptions.Duplicate();
+					childOptions.SetSkipDistributedCacheWrite(true, null);
+				}
+					// Remove child entry but skip nested cascading since we are controlling traversal here
+					RemoveInternal(child, childOptions, token, skipCascade: true);
+				queue.Enqueue((child, depth + 1));
+			}
+		}
 	}
 
 	/// <inheritdoc/>

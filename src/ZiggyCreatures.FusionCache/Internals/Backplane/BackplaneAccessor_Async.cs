@@ -295,13 +295,18 @@ internal partial class BackplaneAccessor
 
 				// HANDLE REMOVE
 				_cache.RemoveMemoryEntryInternal(operationId, message.CacheKey!);
+				// Remove edges for this key and cascade to its children
+				_cache.RemoveEdgesForKey(message.CacheKey!);
+				_cache.CascadeInvalidate(message.CacheKey!);
 				break;
 			case BackplaneMessageAction.EntryExpire:
 				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification has been received from remote cache {RemoteCacheInstanceId} (EXPIRE)", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
 
-				// HANDLE EXPIRE
+		// HANDLE EXPIRE
 				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
+				// CASCADE INVALIDATION TO DEPENDENT CHILDREN
+				_cache.CascadeInvalidate(message.CacheKey!);
 				break;
 			default:
 				// HANDLE UNKNOWN: DO NOTHING
