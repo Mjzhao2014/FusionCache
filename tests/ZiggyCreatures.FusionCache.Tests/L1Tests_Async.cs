@@ -1436,4 +1436,393 @@ public partial class L1Tests
 		Assert.Equal(-1, expectedNegOne);
 		Assert.Equal(1, expectedOne);
 	}
+
+	[Fact]
+	public async Task SlidingExpirationOverrideDefaultDurationAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
+		// SET WITH SLIDING EXPIRATION
+		await cache.GetOrSetAsync<int>("foo", async _ => 42, opt => opt.SetDuration(TimeSpan.FromMilliseconds(500)));
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value1);
+
+		// Override the default duration. entry will be expired 
+		Thread.Sleep(300);
+		var value2 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value2);
+
+		Thread.Sleep(300);
+		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(-1, value3); //expired.
+	}
+
+
+	[Fact]
+	public async Task SlidingExpirationNoDurationSlidingExpiredAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(-1, value4); // Should be expired
+	}
+
+
+	[Fact]
+	public async Task SlidingExpirationNoDurationNotExpiredAsync()
+	{
+		//Default duration is 30s 
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromSeconds(30)
+			}
+		});
+
+		// infinite duration by default
+		Assert.Equal(TimeSpan.MaxValue, cache.DefaultEntryOptions.Duration);
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(10000);
+		var value2 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(10000);
+		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN 30s default duraiton. Sliding Cache won't be expired.
+		Thread.Sleep(11000);
+		var value4 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value4); // cache is not expired. 
+	}
+
+
+	[Fact]
+	public async Task SlidingExpirationWithLongDurationAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				Duration = TimeSpan.FromHours(1),
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// check the sliding expiration in first silding window
+		Thread.Sleep(500);
+		var value = await cache.GetOrDefaultAsync<int>("foo", -1);
+		Assert.Equal(-1, value);
+
+		cache.GetOrSet<int>("foo", 42);
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrDefaultAsync<int>("foo", -1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = await cache.GetOrDefaultAsync<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = await cache.GetOrDefaultAsync<int>("foo", -1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = await cache.GetOrDefaultAsync<int>("foo", -1);
+		Assert.Equal(-1, value4); // Should be expired
+	}
+
+	[Fact]
+	public async Task SlidingExpirationWithShortDurationAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				Duration = TimeSpan.FromMilliseconds(1000),
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value3);
+
+		Thread.Sleep(300);
+		var value4 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(42, value4);
+
+		//Cache expired because the duration is maximum 1000ms
+		Thread.Sleep(300);
+		var value5 = await cache.GetOrSetAsync<int>("foo", async _ => -1);
+		Assert.Equal(-1, value5);
+
+	}
+
+	[Fact]
+	public async Task SlidingExpirationWorksWithFailSafeAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				IsFailSafeEnabled = true,
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) 
+			}
+		});
+
+		int factoryCalls = 0;
+
+		// SET WITH SLIDING EXPIRATION AND FAIL-SAFE
+		var value1 = await cache.GetOrSetAsync<int>("foo", async _ => ++factoryCalls);
+		Assert.Equal(1, factoryCalls);
+		Assert.Equal(1, value1);
+
+		// ACCESS WITHIN SLIDING WINDOW
+		Thread.Sleep(200);
+		var value2 = await cache.GetOrSetAsync<int>("foo", async _ => ++factoryCalls);
+		Assert.Equal(1, value2);
+		Assert.Equal(1, factoryCalls);
+
+		// WAIT LONGER THAN SLIDING DURATION BUT FACTORY THROWS
+		Thread.Sleep(400);
+		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => throw new Exception("Error"));
+		Assert.Equal(1, value3); // Should return stale value due to fail-safe, won't renew cache
+
+		Thread.Sleep(400);
+		// Cache is expired. Get value from factory
+		var value4 = await cache.GetOrSetAsync<int>("foo", async _ => ++factoryCalls);
+		Assert.Equal(2, value4); // cache expired. get new value from factory.
+		Assert.Equal(2, factoryCalls);
+
+	}
+
+	[Fact]
+	public async Task SlidingExpirationTryGetAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500)  // cache will expired in 500ms
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.TryGetAsync<int>("foo");
+		Assert.True(value1.HasValue);
+		Assert.Equal(42, value1.Value);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = await cache.TryGetAsync<int>("foo");
+		Assert.True(value2.HasValue);
+		Assert.Equal(42, value2.Value);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = await cache.TryGetAsync<int>("foo");
+		Assert.True(value3.HasValue);
+		Assert.Equal(42, value3.Value);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = await cache.TryGetAsync<int>("foo");
+		Assert.False(value4.HasValue); // Should be expired
+
+	}
+
+
+	[Fact]
+	public async Task SlidingExpirationGetOrSetAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500)  // cache will expired in 500ms
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrSetAsync<int>("foo",-1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = await cache.GetOrSetAsync<int>("foo",-1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = await cache.GetOrSetAsync<int>("foo",-1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = await cache.GetOrSetAsync<int>("foo",-1);
+		Assert.Equal(-1, value4); 
+
+	}
+
+	[Fact]
+	public async Task SlidingExpirationGetOrDefaultAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				SlidingExpiration = TimeSpan.FromMilliseconds(500) // cache will expired in 500ms
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		cache.GetOrSet<int>("foo", 42);
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrDefaultAsync<int>("foo",-1);
+		Assert.Equal(42, value1);
+
+		// WAIT LESS THAN Duration, Renew sliding window 500ms
+		Thread.Sleep(300);
+		var value2 = await cache.GetOrDefaultAsync<int>("foo", -1);
+		Assert.Equal(42, value2);
+
+		// WAIT LESS THAN SLIDING DURATION AGAIN
+		Thread.Sleep(300);
+		var value3 = await cache.GetOrDefaultAsync<int>("foo",-1);
+		Assert.Equal(42, value3);
+
+		// NOW WAIT LONGER THAN SLIDING DURATION WITHOUT ACCESS
+		Thread.Sleep(600);
+		var value4 = await cache.GetOrDefaultAsync<int>("foo",-1);
+		Assert.Equal(-1, value4); // Should be expired
+
+	}
+
+	
+	[Fact]
+	public async Task SlidingExpirationAdaptiveCacheAsync()
+	{
+		using var cache = new FusionCache(new FusionCacheOptions()
+		{
+			DefaultEntryOptions = new FusionCacheEntryOptions()
+			{
+				Duration = TimeSpan.FromHours(1),
+				SlidingExpiration = TimeSpan.FromMilliseconds(500)
+			}
+		});
+
+		// SET WITH SLIDING EXPIRATION
+		await cache.SetAsync<int>("key1", 42);
+
+		await cache.SetAsync<int>("key2", 32, opt => opt.SetSliding(TimeSpan.FromMilliseconds(100)));
+
+		await cache.SetAsync<int>("key3", 52, opt => opt.SetSliding(TimeSpan.FromMilliseconds(1000)));
+
+		// IMMEDIATELY AVAILABLE
+		var value1 = await cache.GetOrSetAsync<int>("key1", async _ => -1);
+		Assert.Equal(42, value1);
+
+		var value2 = await cache.GetOrSetAsync<int>("key2", async _ =>-1);
+		Assert.Equal(32, value2);
+
+		var value3 = await cache.GetOrSetAsync<int>("key3", async _=> -1);
+		Assert.Equal(52, value3);
+
+		Thread.Sleep(300);
+		value1 = await cache.GetOrSetAsync<int>("key1", async _=> -1);
+		Assert.Equal(42, value1);
+
+		value2 = await cache.GetOrSetAsync<int>("key2", async _=> -1);
+		Assert.Equal(-1, value2); //key2 expired 
+
+		value3 = await cache.GetOrSetAsync<int>("key3", async _=> -1);
+		Assert.Equal(52, value3);
+
+		Thread.Sleep(600);
+		value1 = await cache.GetOrSetAsync<int>("key1", async _=> -1);
+		Assert.Equal(-1, value1); //key1 expired
+
+		value3 = await cache.GetOrSetAsync<int>("key3", async _=> -1);
+		Assert.Equal(52, value3);
+
+		Thread.Sleep(1200); ;
+		value3 = await cache.GetOrSetAsync<int>("key3", async _=> -1);
+		Assert.Equal(-1, value3); //key3 expired
+
+	}
 }

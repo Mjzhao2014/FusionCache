@@ -79,16 +79,37 @@ public sealed class FusionCacheDistributedEntry<TValue>
 
 	internal static FusionCacheDistributedEntry<TValue> CreateFromOptions(TValue value, long timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false);
-
+		TimeSpan baseDuration;
+		if (isStale)
+		{
+			baseDuration = options.FailSafeThrottleDuration;
+		}
+		else if (options.SlidingExpiration.HasValue)
+		{
+			baseDuration = options.SlidingExpiration.Value;
+		}
+		else
+		{
+			baseDuration = options.DistributedCacheDuration.GetValueOrDefault(options.Duration);
+		}
+		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(baseDuration, options, false);
+		if (options.SlidingExpiration.HasValue && isStale == false)
+		{
+			// if there is an absolute duration cap, ensure we don't exceed it
+			if (options.DistributedCacheDuration.HasValue || options.IsDurationExplicitlySet)
+			{
+				var absoluteDuration = options.DistributedCacheDuration ?? options.Duration;
+				var absLimit = timestamp + absoluteDuration.Ticks;
+				if (exp > absLimit)
+					exp = absLimit;
+			}
+		}
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))
 		{
 			var eagerExp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(isStale, options.EagerRefreshThreshold, exp);
-
 			metadata = new FusionCacheEntryMetadata(isStale, eagerExp, etag, lastModifiedTimestamp, options.Size, (byte)options.Priority);
 		}
-
 		return new FusionCacheDistributedEntry<TValue>(
 			value,
 			timestamp,
@@ -101,13 +122,34 @@ public sealed class FusionCacheDistributedEntry<TValue>
 	internal static FusionCacheDistributedEntry<TValue> CreateFromOtherEntry(IFusionCacheEntry entry, FusionCacheEntryOptions options)
 	{
 		var isStale = entry.IsStale();
-		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(isStale ? options.FailSafeThrottleDuration : options.DistributedCacheDuration.GetValueOrDefault(options.Duration), options, false, new DateTimeOffset(entry.Timestamp, TimeSpan.Zero));
-
+		TimeSpan baseDuration;
+		if (isStale)
+		{
+			baseDuration = options.FailSafeThrottleDuration;
+		}
+		else if (options.SlidingExpiration.HasValue)
+		{
+			baseDuration = options.SlidingExpiration.Value;
+		}
+		else
+		{
+			baseDuration = options.DistributedCacheDuration.GetValueOrDefault(options.Duration);
+		}
+		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(baseDuration, options, false, new DateTimeOffset(DateTimeOffset.UtcNow.Ticks, TimeSpan.Zero));
+		if (options.SlidingExpiration.HasValue && isStale == false)
+		{
+			if (options.DistributedCacheDuration.HasValue || options.IsDurationExplicitlySet)
+			{
+				var absoluteDuration = options.DistributedCacheDuration ?? options.Duration;
+				var absLimit = entry.Timestamp + absoluteDuration.Ticks;
+				if (exp > absLimit)
+					exp = absLimit;
+			}
+		}
 		FusionCacheEntryMetadata? metadata = null;
 		if (FusionCacheInternalUtils.RequiresMetadata(options, entry.Metadata))
 		{
 			var eagerExp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(isStale, options.EagerRefreshThreshold, entry.LogicalExpirationTimestamp, entry.Timestamp);
-
 			metadata = new FusionCacheEntryMetadata(
 				isStale,
 				eagerExp,
@@ -117,7 +159,6 @@ public sealed class FusionCacheDistributedEntry<TValue>
 				entry.Metadata?.Priority
 			);
 		}
-
 		return new FusionCacheDistributedEntry<TValue>(
 			entry.GetValue<TValue>(),
 			entry.Timestamp,

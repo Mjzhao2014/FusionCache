@@ -16,6 +16,11 @@ public static class FusionCacheGlobalDefaults
 	public static TimeSpan EntryOptionsDuration { get; set; } = TimeSpan.FromSeconds(30);
 
 	/// <summary>
+	/// The global default <see cref="FusionCacheEntryOptions.SlidingExpiration"/>.
+	/// </summary>
+	public static TimeSpan? EntryOptionsSlidingExpiration { get; set; } = null;
+
+	/// <summary>
 	/// The global default <see cref="FusionCacheEntryOptions.LockTimeout"/>.
 	/// </summary>
 	public static TimeSpan EntryOptionsLockTimeout { get; set; } = Timeout.InfiniteTimeSpan;

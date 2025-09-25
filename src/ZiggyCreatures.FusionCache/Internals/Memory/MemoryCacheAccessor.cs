@@ -51,11 +51,19 @@ internal sealed class MemoryCacheAccessor
 		if (skipPhysicalSet)
 			return;
 
-		// IF FAIL-SAFE IS DISABLED AND DURATION IS <= ZERO -> REMOVE ENTRY (WILL SAVE RESOURCES)
-		if (options.IsFailSafeEnabled == false && options.Duration <= TimeSpan.Zero)
+		// If no fail-safe and effective absolute duration is zero or negative, remove instead of caching
+		if (options.IsFailSafeEnabled == false)
 		{
-			RemoveEntry(operationId, key);
-			return;
+			TimeSpan effectiveDuration;
+			if (options.SlidingExpiration.HasValue)
+				effectiveDuration = options.SlidingExpiration.Value;
+			else
+				effectiveDuration = options.Duration;
+			if (effectiveDuration <= TimeSpan.Zero)
+			{
+				RemoveEntry(operationId, key);
+				return;
+			}
 		}
 
 		// ACTIVITY

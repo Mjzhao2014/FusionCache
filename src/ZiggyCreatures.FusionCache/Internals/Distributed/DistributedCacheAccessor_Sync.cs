@@ -57,11 +57,23 @@ internal partial class DistributedCacheAccessor
 		// ACTIVITY
 		using var activity = Activities.SourceDistributedLevel.StartActivityWithCommonTags(Activities.Names.DistributedSet, _options.CacheName, _options.InstanceId!, key, operationId, CacheLevelKind.Distributed);
 
-		// IF FAIL-SAFE IS DISABLED AND DURATION IS <= ZERO -> REMOVE ENTRY (WILL SAVE RESOURCES)
-		if (options.IsFailSafeEnabled == false && options.DistributedCacheDuration.GetValueOrDefault(options.Duration) <= TimeSpan.Zero)
+		// If no fail-safe and effective distributed duration is zero or negative -> remove instead of caching
+		if (options.IsFailSafeEnabled == false)
 		{
-			RemoveEntry(operationId, key, options, isBackground, token);
-			return true;
+			TimeSpan effectiveDuration;
+			if (options.SlidingExpiration.HasValue)
+			{
+				effectiveDuration = options.SlidingExpiration.Value;
+			}
+			else
+			{
+				effectiveDuration = options.DistributedCacheDuration.GetValueOrDefault(options.Duration);
+			}
+			if (effectiveDuration <= TimeSpan.Zero)
+			{
+				RemoveEntry(operationId, key, options, isBackground, token);
+				return true;
+			}
 		}
 
 		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)

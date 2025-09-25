@@ -14,8 +14,12 @@ namespace ZiggyCreatures.Caching.Fusion;
 /// <br/><br/>
 /// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 /// </summary>
+
 public sealed class FusionCacheEntryOptions
 {
+	private TimeSpan _duration;
+	internal bool IsDurationExplicitlySet { get; private set; } = false;
+
 	/// <summary>
 	/// Creates a new instance of a <see cref="FusionCacheEntryOptions"/> object.
 	/// <br/><br/>
@@ -24,7 +28,16 @@ public sealed class FusionCacheEntryOptions
 	/// <param name="duration">The value for the <see cref="Duration"/> option. If null, <see cref="FusionCacheGlobalDefaults.EntryOptionsDuration"/> will be used.</param>
 	public FusionCacheEntryOptions(TimeSpan? duration = null)
 	{
-		Duration = duration ?? FusionCacheGlobalDefaults.EntryOptionsDuration;
+		if (duration.HasValue)
+		{
+			_duration = duration.Value;
+			IsDurationExplicitlySet = true;
+		}
+		else
+		{
+			_duration = FusionCacheGlobalDefaults.EntryOptionsDuration;
+		}
+		SlidingExpiration = FusionCacheGlobalDefaults.EntryOptionsSlidingExpiration;
 		LockTimeout = FusionCacheGlobalDefaults.EntryOptionsLockTimeout;
 		JitterMaxDuration = FusionCacheGlobalDefaults.EntryOptionsJitterMaxDuration;
 		Size = FusionCacheGlobalDefaults.EntryOptionsSize;
@@ -73,7 +86,20 @@ public sealed class FusionCacheEntryOptions
 	/// <br/>
 	/// <strong>DOCS:</strong> <see href="https://github.com/ZiggyCreatures/FusionCache/blob/main/docs/Options.md"/>
 	/// </summary>
-	public TimeSpan Duration { get; set; }
+	public TimeSpan Duration
+	{
+		get => _duration;
+		set
+		{
+			_duration = value;
+			IsDurationExplicitlySet = true;
+		}
+	}
+
+	/// <summary>
+	/// When set, indicates this entry should use a sliding expiration strategy: the expiration will be renewed on each access.
+	/// </summary>
+	public TimeSpan? SlidingExpiration { get; set; } = FusionCacheGlobalDefaults.EntryOptionsSlidingExpiration;
 
 	private float? _eagerRefreshThreshold = null;
 
@@ -455,7 +481,7 @@ public sealed class FusionCacheEntryOptions
 	/// <inheritdoc/>
 	public override string ToString()
 	{
-		return $"[DUR={Duration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
+		return $"[DUR={Duration.ToLogString()} SLD={SlidingExpiration.ToLogString()} LKTO={LockTimeout.ToLogString_Timeout()} SKMR={SkipMemoryCacheRead.ToLogStringYN()} SKMW={SkipMemoryCacheWrite.ToLogStringYN()} SKDR={SkipDistributedCacheRead.ToLogStringYN()} SKDW={SkipDistributedCacheWrite.ToLogStringYN()} SKDRWS={SkipDistributedCacheReadWhenStale.ToLogStringYN()} DDUR={DistributedCacheDuration.ToLogString()} JIT={JitterMaxDuration.ToLogString()} PR={Priority.ToLogString()} SZ={Size.ToLogString()} FS={IsFailSafeEnabled.ToLogStringYN()} FSMAX={FailSafeMaxDuration.ToLogString()} DFSMAX={DistributedCacheFailSafeMaxDuration.ToLogString()} FSTHR={FailSafeThrottleDuration.ToLogString()} FSTO={FactorySoftTimeout.ToLogString_Timeout()} FHTO={FactoryHardTimeout.ToLogString_Timeout()} TOFC={AllowTimedOutFactoryBackgroundCompletion.ToLogStringYN()} DSTO={DistributedCacheSoftTimeout.ToLogString_Timeout()} DHTO={DistributedCacheHardTimeout.ToLogString_Timeout()} ABDO={AllowBackgroundDistributedCacheOperations.ToLogStringYN()} SBN={SkipBackplaneNotifications.ToLogStringYN()} ABBO={AllowBackgroundBackplaneOperations.ToLogStringYN()} AC={EnableAutoClone.ToLogStringYN()}]";
 	}
 
 	/// <summary>
@@ -603,6 +629,17 @@ public sealed class FusionCacheEntryOptions
 	public FusionCacheEntryOptions SetDurationMin(int durationMin)
 	{
 		return SetDuration(TimeSpan.FromMinutes(durationMin));
+	}
+
+	/// <summary>
+	/// Set the <see cref="SlidingExpiration"/> to use a sliding expiration strategy.
+	/// </summary>
+	/// <param name="slidingExpiration">The sliding expiration to apply. Each access to the entry will reset its expiration by this amount.</param>
+	/// <returns>The <see cref="FusionCacheEntryOptions"/> so that additional calls can be chained.</returns>
+	public FusionCacheEntryOptions SetSliding(TimeSpan slidingExpiration)
+	{
+		SlidingExpiration = slidingExpiration;
+		return this;
 	}
 
 	/// <summary>
@@ -912,29 +949,46 @@ public sealed class FusionCacheEntryOptions
 
 	internal DateTimeOffset GetMemoryAbsoluteExpiration(out bool incoherentFailSafeMaxDuration)
 	{
-		// PHYSICAL DURATION
+		// PHYSICAL DURATION FOR UNDERLYING MEMORY CACHE
 		TimeSpan physicalDuration;
-
+		incoherentFailSafeMaxDuration = false;
 		if (IsFailSafeEnabled == false)
 		{
-			physicalDuration = Duration;
-			incoherentFailSafeMaxDuration = false;
-		}
-		else
-		{
-			if (FailSafeMaxDuration < Duration)
+			if (SlidingExpiration.HasValue)
 			{
-				incoherentFailSafeMaxDuration = true;
-				physicalDuration = Duration;
+				physicalDuration = SlidingExpiration.Value;
 			}
 			else
 			{
-				incoherentFailSafeMaxDuration = false;
-				physicalDuration = FailSafeMaxDuration;
+				physicalDuration = Duration;
 			}
 		}
-
-		// ABSOLUTE EXPIRATION
+		else
+		{
+			// WHEN FAIL-SAFE IS ENABLED PHYSICALLY KEEP LONGER TO ALLOW FALLBACK
+			if (SlidingExpiration.HasValue)
+			{
+				// IGNORE SLIDING FOR PHYSICAL TTL WHEN FAIL-SAFE: USE FailSafeMaxDuration
+				physicalDuration = FailSafeMaxDuration;
+				if (FailSafeMaxDuration < Duration)
+				{
+					incoherentFailSafeMaxDuration = true;
+				}
+			}
+			else
+			{
+				if (FailSafeMaxDuration < Duration)
+				{
+					incoherentFailSafeMaxDuration = true;
+					physicalDuration = Duration;
+				}
+				else
+				{
+					physicalDuration = FailSafeMaxDuration;
+				}
+			}
+		}
+		// ABSOLUTE EXPIRATION FOR PHYSICAL TTL
 		return new DateTimeOffset(FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(physicalDuration, this, true), TimeSpan.Zero);
 	}
 
@@ -983,35 +1037,47 @@ public sealed class FusionCacheEntryOptions
 	{
 		var res = new DistributedCacheEntryOptions();
 
-		// PHYSICAL DURATION
+		// determine physical TTL for distributed cache
 		TimeSpan physicalDuration;
-		TimeSpan durationToUse;
-
-		durationToUse = DistributedCacheDuration ?? Duration;
-
+		var durationToUse = DistributedCacheDuration ?? Duration;
 		if (IsFailSafeEnabled == false)
 		{
-			// FAIL-SAFE DISABLED
-			physicalDuration = durationToUse;
-		}
-		else
-		{
-			// FAIL-SAFE ENABLED
-			var failSafeMaxDurationToUse = DistributedCacheFailSafeMaxDuration ?? FailSafeMaxDuration;
-			if (failSafeMaxDurationToUse < durationToUse)
+			if (SlidingExpiration.HasValue)
 			{
-				// INCOHERENT DURATION
-				physicalDuration = durationToUse;
-
-				if (logger?.IsEnabled(options.IncoherentOptionsNormalizationLogLevel) ?? false)
-					logger.Log(options.IncoherentOptionsNormalizationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): DistributedCacheFailSafeMaxDuration/FailSafeMaxDuration {FailSafeMaxDuration} was lower than the DistributedCacheDuration/Duration {Duration} on {Options} {MemoryOptions}. Duration has been used instead.", options.CacheName, options.InstanceId, operationId, key, failSafeMaxDurationToUse.ToLogString(), durationToUse.ToLogString(), this.ToLogString(), res.ToLogString());
+				physicalDuration = SlidingExpiration.Value;
 			}
 			else
 			{
-				physicalDuration = failSafeMaxDurationToUse;
+				physicalDuration = durationToUse;
 			}
 		}
-
+		else
+		{
+			var failSafeMaxDurationToUse = DistributedCacheFailSafeMaxDuration ?? FailSafeMaxDuration;
+			if (SlidingExpiration.HasValue)
+			{
+				// physically keep for fail-safe
+				physicalDuration = failSafeMaxDurationToUse;
+				if (failSafeMaxDurationToUse < durationToUse)
+				{
+					if (logger?.IsEnabled(options.IncoherentOptionsNormalizationLogLevel) ?? false)
+						logger.Log(options.IncoherentOptionsNormalizationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): DistributedCacheFailSafeMaxDuration/FailSafeMaxDuration {FailSafeMaxDuration} was lower than the DistributedCacheDuration/Duration {Duration} on {Options} {MemoryOptions}. Duration has been used instead.", options.CacheName, options.InstanceId, operationId, key, failSafeMaxDurationToUse.ToLogString(), durationToUse.ToLogString(), this.ToLogString(), res.ToLogString());
+				}
+			}
+			else
+			{
+				if (failSafeMaxDurationToUse < durationToUse)
+				{
+					physicalDuration = durationToUse;
+					if (logger?.IsEnabled(options.IncoherentOptionsNormalizationLogLevel) ?? false)
+						logger.Log(options.IncoherentOptionsNormalizationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): DistributedCacheFailSafeMaxDuration/FailSafeMaxDuration {FailSafeMaxDuration} was lower than the DistributedCacheDuration/Duration {Duration} on {Options} {MemoryOptions}. Duration has been used instead.", options.CacheName, options.InstanceId, operationId, key, failSafeMaxDurationToUse.ToLogString(), durationToUse.ToLogString(), this.ToLogString(), res.ToLogString());
+				}
+				else
+				{
+					physicalDuration = failSafeMaxDurationToUse;
+				}
+			}
+		}
 		res.AbsoluteExpiration = new DateTimeOffset(FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(physicalDuration, this, false), TimeSpan.Zero);
 
 		return res;
@@ -1086,7 +1152,9 @@ public sealed class FusionCacheEntryOptions
 		{
 			IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching,
 
-			Duration = duration ?? Duration,
+			_duration = duration ?? _duration,
+			IsDurationExplicitlySet = IsDurationExplicitlySet,
+			SlidingExpiration = SlidingExpiration,
 			LockTimeout = LockTimeout,
 			Size = Size,
 			Priority = Priority,
