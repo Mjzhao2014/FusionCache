@@ -9,9 +9,12 @@ namespace ZiggyCreatures.Caching.Fusion.Events;
 /// <summary>
 /// The events hub for events specific for the memory level.
 /// </summary>
+
 public sealed class FusionCacheMemoryEventsHub
 	: FusionCacheCommonEventsHub
 {
+	// keep track of entries being removed explicitly due to capacity-based eviction so we can override the eviction reason
+	private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _markedEvictions = new();
 	/// <summary>
 	/// Initializes a new instance of the <see cref="FusionCacheMemoryEventsHub" /> class.
 	/// </summary>
@@ -42,12 +45,38 @@ public sealed class FusionCacheMemoryEventsHub
 		return Eviction is not null;
 	}
 
-	internal void OnEviction(string operationId, string key, EvictionReason reason, object? value)
+	/// <summary>
+	/// Raises the eviction event for a cache entry that has been removed.
+	/// </summary>
+	/// <param name="operationId">The operation id involved.</param>
+	/// <param name="key">The key being evicted.</param>
+	/// <param name="reason">The reason for the eviction, as provided by the underlying memory cache.</param>
+	/// <param name="policyName">If eviction was triggered by a configured eviction policy, its name; otherwise <see langword="null"/>.</param>
+	/// <param name="value">The value removed from the cache.</param>
+	internal void OnEviction(string operationId, string key, EvictionReason reason, string? policyName, object? value)
 	{
 		// METRIC
 		Metrics.CounterMemoryEvict.Maybe()?.AddWithCommonTags(1, _cache.CacheName, _cache.InstanceId, new KeyValuePair<string, object?>(Tags.Names.MemoryEvictReason, reason.ToString()));
 
-		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+		Eviction?.SafeExecute(operationId, key, _cache, new FusionCacheEntryEvictionEventArgs(key, reason, policyName, value), nameof(Eviction), _logger, _errorsLogLevel, _syncExecution);
+	}
+
+	/// <summary>
+	/// Marks a key as being removed due to capacity-based eviction, so that arguments such as policy name
+	/// can be supplied to the eviction callback.
+	/// </summary>
+	internal void MarkEviction(string key, string? policyName)
+	{
+		_markedEvictions[key] = policyName;
+	}
+
+	/// <summary>
+	/// Attempt to retrieve and clear any marker for an eviction that was explicitly triggered by capacity.
+	/// Returns true if the key had been marked.
+	/// </summary>
+	internal bool TryTakeMarkedEviction(string key, out string? policyName)
+	{
+		return _markedEvictions.TryRemove(key, out policyName);
 	}
 
 	internal void OnExpire(string operationId, string key)

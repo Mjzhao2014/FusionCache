@@ -968,9 +968,17 @@ public sealed class FusionCacheEntryOptions
 		if (events.HasEvictionSubscribers())
 		{
 			res.RegisterPostEvictionCallback(
-				(key, entry, reason, state) =>
+				(keyObj, entry, reason, state) =>
 				{
-					((FusionCacheMemoryEventsHub?)state)?.OnEviction(string.Empty, key.ToString() ?? "", reason, ((IFusionCacheMemoryEntry?)entry)?.Value);
+					var hub = state as FusionCacheMemoryEventsHub;
+					var keyStr = keyObj.ToString() ?? "";
+					// if this key was flagged for capacity-based eviction, override the reason and capture the policy name
+					string? policyName = null;
+					if (hub?.TryTakeMarkedEviction(keyStr, out policyName) == true)
+					{
+						reason = EvictionReason.Capacity;
+					}
+					hub?.OnEviction(string.Empty, keyStr, reason, policyName, ((IFusionCacheMemoryEntry?)entry)?.Value);
 				},
 				events
 			);

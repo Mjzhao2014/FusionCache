@@ -114,6 +114,9 @@ public class FusionCacheOptions
 		PluginsInfoLogLevel = LogLevel.Information;
 		PluginsErrorsLogLevel = LogLevel.Error;
 		MissingCacheKeyPrefixWarningLogLevel = LogLevel.Warning;
+
+		// L1 eviction policy (null by default = disabled)
+		EvictionPolicy = null;
 	}
 
 	/// <summary>
@@ -137,6 +140,13 @@ public class FusionCacheOptions
 			_cacheName = value;
 		}
 	}
+
+	/// <summary>
+	/// Gets or sets an optional L1 eviction policy implementation which can be used to automatically remove
+	/// entries from the in-memory cache when configured capacity thresholds are reached.
+	/// <para>If <see langword="null"/> (the default), no capacity-driven eviction will occur.</para>
+	/// </summary>
+	public IFusionCacheEvictionPolicy? EvictionPolicy { get; set; }
 
 	/// <summary>
 	/// The instance id of the cache: it will be used for low-level identification for the same logical cache between different nodes in a multi-node scenario: it is automatically set to a random value.
@@ -595,8 +605,12 @@ public class FusionCacheOptions
 
 			PluginsErrorsLogLevel = PluginsErrorsLogLevel,
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
-
+			
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+
+			// NOTE: the eviction policy instance is carried over by reference (no deep clone),
+			// so subsequent modifications to the policy instance will be visible in the duplicate.
+			EvictionPolicy = EvictionPolicy,
 		};
 
 		return res;
