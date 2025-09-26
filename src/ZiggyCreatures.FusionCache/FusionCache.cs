@@ -330,6 +330,12 @@ public sealed partial class FusionCache
 
 			//entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry, options);
 			entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(distributedEntry.GetValue<TValue>(), distributedEntry.Timestamp, distributedEntry.Tags, options, true, distributedEntry.Metadata?.LastModifiedTimestamp, distributedEntry.Metadata?.ETag);
+
+			if (options.SlidingExpiration.HasValue)
+			{
+				// Preserve the original logical expiration so a fail-safe activation does not extend the lifetime
+				entry.LogicalExpirationTimestamp = distributedEntry.LogicalExpirationTimestamp;
+			}
 		}
 		else if (memoryEntry is not null && memoryEntry.Metadata is not null)
 		{
@@ -338,13 +344,22 @@ public sealed partial class FusionCache
 				_logger.Log(_options.FailSafeActivationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): FAIL-SAFE activated (from memory)", CacheName, InstanceId, operationId, key);
 
 			var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(options.FailSafeThrottleDuration, options, false);
-
-			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
-				_logger?.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): SHIFTING A MEMORY ENTRY FROM {OldExp} TO {NewExp} ({Diff} DIFF)", CacheName, InstanceId, operationId, key, new DateTimeOffset(memoryEntry.LogicalExpirationTimestamp, TimeSpan.Zero), new DateTimeOffset(exp, TimeSpan.Zero), new DateTimeOffset(exp, TimeSpan.Zero) - new DateTimeOffset(memoryEntry.LogicalExpirationTimestamp, TimeSpan.Zero));
-
 			memoryEntry.Metadata.IsStale = true;
-			memoryEntry.LogicalExpirationTimestamp = exp;
-			memoryEntry.Metadata.EagerExpirationTimestamp = null;
+			if (options.SlidingExpiration.HasValue)
+			{
+				// Keep the logical expiration untouched so it remains expired and clear sliding info to avoid renewals on stale data.
+				memoryEntry.Metadata.EagerExpirationTimestamp = null;
+				memoryEntry.Metadata.SlidingDurationTicks = null;
+				memoryEntry.Metadata.JitterMaxDurationTicks = null;
+			}
+			else
+			{
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger?.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): SHIFTING A MEMORY ENTRY FROM {OldExp} TO {NewExp} ({Diff} DIFF)", CacheName, InstanceId, operationId, key, new DateTimeOffset(memoryEntry.LogicalExpirationTimestamp, TimeSpan.Zero), new DateTimeOffset(exp, TimeSpan.Zero), new DateTimeOffset(exp, TimeSpan.Zero) - new DateTimeOffset(memoryEntry.LogicalExpirationTimestamp, TimeSpan.Zero));
+
+				memoryEntry.LogicalExpirationTimestamp = exp;
+				memoryEntry.Metadata.EagerExpirationTimestamp = null;
+			}
 			entry = memoryEntry;
 		}
 		else if (failSafeDefaultValue.HasValue)
@@ -354,6 +369,10 @@ public sealed partial class FusionCache
 				_logger.Log(_options.FailSafeActivationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): FAIL-SAFE activated (from fail-safe default value)", CacheName, InstanceId, operationId, key);
 
 			entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(failSafeDefaultValue.Value, null, null, options, true, null, null);
+			if (options.SlidingExpiration.HasValue)
+			{
+				entry.LogicalExpirationTimestamp = FusionCacheInternalUtils.GetCurrentTimestamp();
+			}
 		}
 
 		if (entry is not null)
@@ -369,6 +388,63 @@ public sealed partial class FusionCache
 			_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): unable to activate FAIL-SAFE (no entries in memory or distributed, nor fail-safe default value)", CacheName, InstanceId, operationId, key);
 
 		return null;
+	}
+
+	// We may need to replay sliding expirations using clone options: cache-level defaults can diverge between the original write and the renewal.
+	private static FusionCacheEntryOptions PrepareSlidingRenewalOptions(IFusionCacheEntry entry, FusionCacheEntryMetadata metadata, FusionCacheEntryOptions options)
+	{
+		var targetSlidingTicks = metadata.SlidingDurationTicks;
+		var currentSlidingTicks = options.SlidingExpiration?.Ticks;
+
+		var targetJitterTicks = metadata.JitterMaxDurationTicks ?? 0;
+		var currentJitterTicks = options.JitterMaxDuration.Ticks;
+
+		long? targetDurationTicks = null;
+		if (metadata.AbsoluteExpirationTimestampTicks.HasValue)
+		{
+			var diff = metadata.AbsoluteExpirationTimestampTicks.Value - entry.Timestamp;
+			if (diff < 0)
+				diff = 0;
+			targetDurationTicks = diff;
+		}
+
+		var needsClone = false;
+
+		if (targetSlidingTicks != currentSlidingTicks)
+			needsClone = true;
+
+		if (targetJitterTicks != currentJitterTicks)
+			needsClone = true;
+
+		if (targetDurationTicks.HasValue)
+		{
+			if (options.IsDurationExplicitlySet == false || options.Duration.Ticks != targetDurationTicks.Value)
+				needsClone = true;
+		}
+
+		if (needsClone == false)
+			return options;
+
+		var clone = options.Duplicate();
+
+		if (targetSlidingTicks.HasValue)
+		{
+			clone.SlidingExpiration = TimeSpan.FromTicks(targetSlidingTicks.Value);
+		}
+		else
+		{
+			clone.SlidingExpiration = null;
+		}
+
+		if (targetDurationTicks.HasValue)
+		{
+			// Keep Duration aligned with the recorded absolute expiration cap when the original call set one.
+			clone.SetDuration(new TimeSpan(targetDurationTicks.Value));
+		}
+
+		clone.JitterMaxDuration = targetJitterTicks > 0 ? TimeSpan.FromTicks(targetJitterTicks) : TimeSpan.Zero;
+
+		return clone;
 	}
 
 	// BACKGROUND FACTORY COMPLETION

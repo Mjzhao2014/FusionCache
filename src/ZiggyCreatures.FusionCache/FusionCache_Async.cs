@@ -12,32 +12,51 @@ public partial class FusionCache
 {
 	private async ValueTask MaybeRenewSlidingExpirationAsync<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, CancellationToken token)
 	{
-		if (options.SlidingExpiration.HasValue == false)
+		// Sliding renewal relies on the metadata we persist alongside the entry (see CreateFromOptions).
+		var metadata = entry.Metadata;
+		if (metadata is null)
 			return;
-		if (entry.Metadata?.IsStale == true)
+		if (metadata.IsStale)
+			return;
+		if (metadata.SlidingDurationTicks is null || metadata.SlidingDurationTicks.Value <= 0)
 			return;
 		if (entry.IsLogicallyExpired())
 			return;
-		var baseDuration = options.SlidingExpiration.Value;
-		var newExpTicks = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(baseDuration, options, true);
-		if (options.IsDurationExplicitlySet)
+
+		var slidingDuration = TimeSpan.FromTicks(metadata.SlidingDurationTicks.Value);
+		var baseDuration = slidingDuration;
+		if (metadata.JitterMaxDurationTicks is long jitterTicks && jitterTicks > 0)
 		{
-			var absLimitTicks = entry.Timestamp + options.Duration.Ticks;
-			if (newExpTicks > absLimitTicks)
-				newExpTicks = absLimitTicks;
+			var jitter = TimeSpan.FromTicks(jitterTicks);
+			if (jitter > TimeSpan.Zero)
+			{
+				var jitterMs = ConcurrentRandom.NextDouble() * jitter.TotalMilliseconds;
+				var jitterSpan = TimeSpan.FromMilliseconds(jitterMs);
+				if (TimeSpan.MaxValue - baseDuration <= jitterSpan)
+					baseDuration = TimeSpan.MaxValue;
+				else
+					baseDuration = baseDuration + jitterSpan;
+			}
 		}
-		entry.LogicalExpirationTimestamp = newExpTicks;
-		if (entry.Metadata is not null)
+
+		var newExpirationTicks = DateTimeOffset.UtcNow.Add(baseDuration).UtcTicks;
+		if (metadata.AbsoluteExpirationTimestampTicks is long absoluteLimit && newExpirationTicks > absoluteLimit)
+			newExpirationTicks = absoluteLimit;
+
+		// Keep the cached entry aligned with the renewed sliding window, while honoring eager refresh rules.
+		entry.LogicalExpirationTimestamp = newExpirationTicks;
+		metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, options.EagerRefreshThreshold, newExpirationTicks);
+
+		// Renewing may require a cloned options object: callers can pass different defaults later on.
+		var effectiveOptions = PrepareSlidingRenewalOptions(entry, metadata, options);
+
+		if (_mca.ShouldWrite(effectiveOptions) && entry is IFusionCacheMemoryEntry memoryEntry)
 		{
-			entry.Metadata.EagerExpirationTimestamp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(false, options.EagerRefreshThreshold, newExpTicks);
+			_mca.SetEntry<TValue>(operationId, key, memoryEntry, effectiveOptions);
 		}
-		if (_mca.ShouldWrite(options))
+		if (RequiresDistributedOperations(effectiveOptions))
 		{
-			_mca.SetEntry<TValue>(operationId, key, (IFusionCacheMemoryEntry)entry, options);
-		}
-		if (RequiresDistributedOperations(options))
-		{
-			await DistributedSetEntryAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+			await DistributedSetEntryAsync<TValue>(operationId, key, entry, effectiveOptions, token).ConfigureAwait(false);
 		}
 	}
 	// GET OR SET
@@ -165,7 +184,7 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
-			await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+			await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry!, options, token).ConfigureAwait(false);
 			return memoryEntry;
 		}
 
@@ -241,7 +260,7 @@ public partial class FusionCache
 				isStale = false;
 				entry = FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options);
 				// sliding expiration on distributed hit
-				await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, entry, options, token).ConfigureAwait(false);
+				await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, entry!, options, token).ConfigureAwait(false);
 			}
 			else
 			{
@@ -522,7 +541,7 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntry!.IsStale(), activity);
 			// maybe renew sliding expiration
-			await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
+			await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry!, options, token).ConfigureAwait(false);
 			return memoryEntry;
 		}
 
@@ -566,13 +585,14 @@ public partial class FusionCache
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using distributed entry", CacheName, InstanceId, operationId, key);
 			memoryEntry = distributedEntry!.AsMemoryEntry<TValue>(options);
 			// renew sliding expiration if configured
-			if (options.SlidingExpiration.HasValue && distributedEntry.Metadata?.IsStale != true && memoryEntry.IsLogicallyExpired() == false)
+			var memoryMetadata = memoryEntry?.Metadata;
+			if (memoryEntry is not null && memoryMetadata?.IsStale != true && memoryMetadata?.SlidingDurationTicks is long slidingTicks && slidingTicks > 0 && memoryEntry.IsLogicallyExpired() == false)
 			{
 				await MaybeRenewSlidingExpirationAsync<TValue>(operationId, key, memoryEntry, options, token).ConfigureAwait(false);
 			}
 			else
 			{
-				if (_mca.ShouldWrite(options))
+				if (_mca.ShouldWrite(options) && memoryEntry is not null)
 				{
 					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
 				}

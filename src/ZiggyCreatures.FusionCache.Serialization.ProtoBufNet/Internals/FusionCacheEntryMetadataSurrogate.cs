@@ -24,6 +24,15 @@ internal class FusionCacheEntryMetadataSurrogate
 	[ProtoMember(6)]
 	public byte? Priority { get; set; }
 
+	[ProtoMember(7)]
+	public long? SlidingDurationTicks { get; set; }
+
+	[ProtoMember(8)]
+	public long? AbsoluteExpirationTimestampTicks { get; set; }
+
+	[ProtoMember(9)]
+	public long? JitterMaxDurationTicks { get; set; }
+
 	public static implicit operator FusionCacheEntryMetadataSurrogate?(FusionCacheEntryMetadata value)
 	{
 		if (value is null)
@@ -36,7 +45,10 @@ internal class FusionCacheEntryMetadataSurrogate
 			ETag = value.ETag,
 			LastModifiedTimestamp = value.LastModifiedTimestamp,
 			Size = value.Size,
-			Priority = value.Priority
+			Priority = value.Priority,
+			SlidingDurationTicks = value.SlidingDurationTicks,
+			AbsoluteExpirationTimestampTicks = value.AbsoluteExpirationTimestampTicks,
+			JitterMaxDurationTicks = value.JitterMaxDurationTicks
 		};
 	}
 
@@ -51,7 +63,10 @@ internal class FusionCacheEntryMetadataSurrogate
 			value.ETag,
 			value.LastModifiedTimestamp,
 			value.Size,
-			value.Priority
+			value.Priority,
+			value.SlidingDurationTicks,
+			value.AbsoluteExpirationTimestampTicks,
+			value.JitterMaxDurationTicks
 		);
 	}
 }

@@ -27,10 +27,19 @@ internal partial class SerializableFusionCacheEntryMetadata
 	[MemoryPackInclude]
 	public byte? Priority => Metadata?.Priority;
 
+	[MemoryPackInclude]
+	public long? SlidingDurationTicks => Metadata?.SlidingDurationTicks;
+
+	[MemoryPackInclude]
+	public long? AbsoluteExpirationTimestampTicks => Metadata?.AbsoluteExpirationTimestampTicks;
+
+	[MemoryPackInclude]
+	public long? JitterMaxDurationTicks => Metadata?.JitterMaxDurationTicks;
+
 	[MemoryPackConstructor]
-	SerializableFusionCacheEntryMetadata(bool isStale, long? eagerExpirationTimestamp, string? etag, long? lastModifiedTimestamp, long? size, byte? priority)
+	SerializableFusionCacheEntryMetadata(bool isStale, long? eagerExpirationTimestamp, string? etag, long? lastModifiedTimestamp, long? size, byte? priority, long? slidingDurationTicks, long? absoluteExpirationTimestampTicks, long? jitterMaxDurationTicks)
 	{
-		Metadata = new FusionCacheEntryMetadata(isStale, eagerExpirationTimestamp, etag, lastModifiedTimestamp, size, priority);
+		Metadata = new FusionCacheEntryMetadata(isStale, eagerExpirationTimestamp, etag, lastModifiedTimestamp, size, priority, slidingDurationTicks, absoluteExpirationTimestampTicks, jitterMaxDurationTicks);
 	}
 
 	public SerializableFusionCacheEntryMetadata(FusionCacheEntryMetadata? metadata)

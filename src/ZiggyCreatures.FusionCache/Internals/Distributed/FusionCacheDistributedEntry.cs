@@ -93,13 +93,16 @@ public sealed class FusionCacheDistributedEntry<TValue>
 			baseDuration = options.DistributedCacheDuration.GetValueOrDefault(options.Duration);
 		}
 		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(baseDuration, options, false);
+		long? absoluteExpirationTimestamp = null;
 		if (options.SlidingExpiration.HasValue && isStale == false)
 		{
 			// if there is an absolute duration cap, ensure we don't exceed it
 			if (options.DistributedCacheDuration.HasValue || options.IsDurationExplicitlySet)
 			{
+				// Persist the absolute cap so renewals after a round-trip through the distributed cache still respect Duration.
 				var absoluteDuration = options.DistributedCacheDuration ?? options.Duration;
 				var absLimit = timestamp + absoluteDuration.Ticks;
+				absoluteExpirationTimestamp = absLimit;
 				if (exp > absLimit)
 					exp = absLimit;
 			}
@@ -108,7 +111,11 @@ public sealed class FusionCacheDistributedEntry<TValue>
 		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))
 		{
 			var eagerExp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(isStale, options.EagerRefreshThreshold, exp);
-			metadata = new FusionCacheEntryMetadata(isStale, eagerExp, etag, lastModifiedTimestamp, options.Size, (byte)options.Priority);
+			long? slidingTicks = null;
+			if (isStale == false && options.SlidingExpiration.HasValue)
+				slidingTicks = options.SlidingExpiration.Value.Ticks;
+			// Same metadata persisted across L2 ensures sliding renewals work even when entries travel between tiers.
+			metadata = new FusionCacheEntryMetadata(isStale, eagerExp, etag, lastModifiedTimestamp, options.Size, (byte)options.Priority, slidingTicks, absoluteExpirationTimestamp, null);
 		}
 		return new FusionCacheDistributedEntry<TValue>(
 			value,
@@ -136,12 +143,14 @@ public sealed class FusionCacheDistributedEntry<TValue>
 			baseDuration = options.DistributedCacheDuration.GetValueOrDefault(options.Duration);
 		}
 		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(baseDuration, options, false, new DateTimeOffset(DateTimeOffset.UtcNow.Ticks, TimeSpan.Zero));
+		long? absoluteExpirationTimestamp = null;
 		if (options.SlidingExpiration.HasValue && isStale == false)
 		{
 			if (options.DistributedCacheDuration.HasValue || options.IsDurationExplicitlySet)
 			{
 				var absoluteDuration = options.DistributedCacheDuration ?? options.Duration;
 				var absLimit = entry.Timestamp + absoluteDuration.Ticks;
+				absoluteExpirationTimestamp = absLimit;
 				if (exp > absLimit)
 					exp = absLimit;
 			}
@@ -156,7 +165,10 @@ public sealed class FusionCacheDistributedEntry<TValue>
 				entry.Metadata?.ETag,
 				entry.Metadata?.LastModifiedTimestamp,
 				entry.Metadata?.Size,
-				entry.Metadata?.Priority
+				entry.Metadata?.Priority,
+				entry.Metadata?.SlidingDurationTicks,
+				absoluteExpirationTimestamp ?? entry.Metadata?.AbsoluteExpirationTimestampTicks,
+				entry.Metadata?.JitterMaxDurationTicks
 			);
 		}
 		return new FusionCacheDistributedEntry<TValue>(

@@ -18,7 +18,10 @@ public sealed class FusionCacheEntryMetadata
 	/// <param name="lastModifiedTimestamp">If provided, it's the last modified date of the entry, expressed as a timestamp (UtcTicks): this may be used in the next refresh cycle (eg: with the use of the "If-Modified-Since" header in an http request) to check if the entry is changed, to avoid getting the entire value.</param>
 	/// <param name="size">The Size of the cache entry.</param>
 	/// <param name="priority">The Priority of the cache entry, or null for the default value.</param>
-	public FusionCacheEntryMetadata(bool isStale, long? eagerExpirationTimestamp, string? etag, long? lastModifiedTimestamp, long? size, byte? priority)
+	/// <param name="slidingDurationTicks">The sliding expiration duration configured for the entry, expressed in ticks.</param>
+	/// <param name="absoluteExpirationTimestampTicks">The absolute expiration limit for the entry, expressed in ticks.</param>
+	/// <param name="jitterMaxDurationTicks">The maximum jitter duration configured for the entry, expressed in ticks.</param>
+	public FusionCacheEntryMetadata(bool isStale, long? eagerExpirationTimestamp, string? etag, long? lastModifiedTimestamp, long? size, byte? priority, long? slidingDurationTicks = null, long? absoluteExpirationTimestampTicks = null, long? jitterMaxDurationTicks = null)
 	{
 		IsStale = isStale;
 		EagerExpirationTimestamp = eagerExpirationTimestamp;
@@ -26,6 +29,9 @@ public sealed class FusionCacheEntryMetadata
 		LastModifiedTimestamp = lastModifiedTimestamp;
 		Size = size;
 		Priority = priority;
+		SlidingDurationTicks = slidingDurationTicks;
+		AbsoluteExpirationTimestampTicks = absoluteExpirationTimestampTicks;
+		JitterMaxDurationTicks = jitterMaxDurationTicks;
 		if (Priority == FusionCacheInternalUtils.CacheItemPriority_DefaultValue)
 			Priority = null;
 	}
@@ -72,9 +78,27 @@ public sealed class FusionCacheEntryMetadata
 	[DataMember(Name = "p", EmitDefaultValue = false)]
 	public byte? Priority { get; set; }
 
+	/// <summary>
+	/// Sliding expiration duration configured for the entry, expressed in ticks.
+	/// </summary>
+	[DataMember(Name = "sd", EmitDefaultValue = false)]
+	public long? SlidingDurationTicks { get; set; }
+
+	/// <summary>
+	/// Absolute expiration limit for the entry (in ticks), when applicable.
+	/// </summary>
+	[DataMember(Name = "ax", EmitDefaultValue = false)]
+	public long? AbsoluteExpirationTimestampTicks { get; set; }
+
+	/// <summary>
+	/// Jitter max duration configured for the entry, expressed in ticks.
+	/// </summary>
+	[DataMember(Name = "jd", EmitDefaultValue = false)]
+	public long? JitterMaxDurationTicks { get; set; }
+
 	/// <inheritdoc/>
 	public override string ToString()
 	{
-		return $"[S={IsStale.ToLogStringYN()}, EEXP={EagerExpirationTimestamp.ToLogString_DateTimeOffsetUTC()}, LM={LastModifiedTimestamp.ToLogString_DateTimeOffsetUTC()}, ET={(string.IsNullOrWhiteSpace(ETag) ? "/" : ETag)}, S={Size.ToLogString()}, P={(CacheItemPriority)Priority.GetValueOrDefault(1)}]";
+		return $"[S={IsStale.ToLogStringYN()}, EEXP={EagerExpirationTimestamp.ToLogString_DateTimeOffsetUTC()}, LM={LastModifiedTimestamp.ToLogString_DateTimeOffsetUTC()}, ET={(string.IsNullOrWhiteSpace(ETag) ? "/" : ETag)}, S={Size.ToLogString()}, P={(CacheItemPriority)Priority.GetValueOrDefault(1)}, SD={(SlidingDurationTicks.HasValue ? TimeSpan.FromTicks(SlidingDurationTicks.Value).ToLogString() : "/")}, AX={(AbsoluteExpirationTimestampTicks.ToLogString_DateTimeOffsetUTC())}, JD={(JitterMaxDurationTicks.HasValue ? TimeSpan.FromTicks(JitterMaxDurationTicks.Value).ToLogString() : "/")}]";
 	}
 }

@@ -1657,7 +1657,7 @@ public partial class L1Tests
 		//Cache expired because the duration is maximum 1000ms
 		Thread.Sleep(300);
 		var value5 = cache.GetOrDefault<int>("foo", -1);
-		Assert.Equal(-1, value4);
+		Assert.Equal(-1, value5);
 
 	}
 
@@ -1688,7 +1688,7 @@ public partial class L1Tests
 		Assert.Equal(1, factoryCalls);
 
 		// WAIT LONGER THAN SLIDING DURATION BUT FACTORY THROWS
-		Thread.Sleep(400);
+		Thread.Sleep(600);
 		var value3 = cache.GetOrSet<int>("foo", _ => throw new Exception("Error"));
 		Assert.Equal(1, value3); // Should return stale value due to fail-safe, won't renew cache
 

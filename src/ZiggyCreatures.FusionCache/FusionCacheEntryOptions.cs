@@ -18,6 +18,8 @@ namespace ZiggyCreatures.Caching.Fusion;
 public sealed class FusionCacheEntryOptions
 {
 	private TimeSpan _duration;
+	private TimeSpan _implicitDuration;
+	private TimeSpan? _slidingExpiration;
 	internal bool IsDurationExplicitlySet { get; private set; } = false;
 
 	/// <summary>
@@ -32,10 +34,12 @@ public sealed class FusionCacheEntryOptions
 		{
 			_duration = duration.Value;
 			IsDurationExplicitlySet = true;
+			_implicitDuration = FusionCacheGlobalDefaults.EntryOptionsDuration;
 		}
 		else
 		{
 			_duration = FusionCacheGlobalDefaults.EntryOptionsDuration;
+			_implicitDuration = _duration;
 		}
 		SlidingExpiration = FusionCacheGlobalDefaults.EntryOptionsSlidingExpiration;
 		LockTimeout = FusionCacheGlobalDefaults.EntryOptionsLockTimeout;
@@ -99,7 +103,25 @@ public sealed class FusionCacheEntryOptions
 	/// <summary>
 	/// When set, indicates this entry should use a sliding expiration strategy: the expiration will be renewed on each access.
 	/// </summary>
-	public TimeSpan? SlidingExpiration { get; set; } = FusionCacheGlobalDefaults.EntryOptionsSlidingExpiration;
+	public TimeSpan? SlidingExpiration
+	{
+		get => _slidingExpiration;
+		set
+		{
+			_slidingExpiration = value;
+			NormalizeDurationForSliding();
+		}
+	}
+
+	private void NormalizeDurationForSliding()
+	{
+		if (IsDurationExplicitlySet)
+			return;
+
+		_duration = _slidingExpiration.HasValue
+			? TimeSpan.MaxValue
+			: _implicitDuration;
+	}
 
 	private float? _eagerRefreshThreshold = null;
 
@@ -1148,13 +1170,12 @@ public sealed class FusionCacheEntryOptions
 	/// <returns>The newly created <see cref="FusionCacheEntryOptions"/> object.</returns>
 	public FusionCacheEntryOptions Duplicate(TimeSpan? duration = null)
 	{
-		return new FusionCacheEntryOptions()
+		var clone = new FusionCacheEntryOptions()
 		{
 			IsSafeForAdaptiveCaching = IsSafeForAdaptiveCaching,
 
 			_duration = duration ?? _duration,
-			IsDurationExplicitlySet = IsDurationExplicitlySet,
-			SlidingExpiration = SlidingExpiration,
+			_implicitDuration = _implicitDuration,
 			LockTimeout = LockTimeout,
 			Size = Size,
 			Priority = Priority,
@@ -1196,6 +1217,12 @@ public sealed class FusionCacheEntryOptions
 
 			EnableAutoClone = EnableAutoClone
 		};
+
+		clone.IsDurationExplicitlySet = duration.HasValue ? true : IsDurationExplicitlySet;
+		clone._slidingExpiration = _slidingExpiration;
+		clone.NormalizeDurationForSliding();
+
+		return clone;
 	}
 
 	internal FusionCacheEntryOptions EnsureIsSafeForAdaptiveCaching()

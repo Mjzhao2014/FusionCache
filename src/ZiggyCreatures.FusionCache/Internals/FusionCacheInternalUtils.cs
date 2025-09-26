@@ -546,6 +546,7 @@ internal static class FusionCacheInternalUtils
 			|| options.EagerRefreshThreshold is not null
 			|| options.Size is not null
 			|| options.Priority != CacheItemPriority.Normal
+			|| options.SlidingExpiration.HasValue
 		;
 	}
 
@@ -560,6 +561,7 @@ internal static class FusionCacheInternalUtils
 			|| options.Priority != CacheItemPriority.Normal
 			|| lastModifiedTimestamp is not null
 			|| etag is not null
+			|| options.SlidingExpiration.HasValue
 		;
 	}
 

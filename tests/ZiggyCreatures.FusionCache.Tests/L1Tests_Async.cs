@@ -1652,7 +1652,7 @@ public partial class L1Tests
 		Assert.Equal(1, factoryCalls);
 
 		// WAIT LONGER THAN SLIDING DURATION BUT FACTORY THROWS
-		Thread.Sleep(400);
+		Thread.Sleep(600);
 		var value3 = await cache.GetOrSetAsync<int>("foo", async _ => throw new Exception("Error"));
 		Assert.Equal(1, value3); // Should return stale value due to fail-safe, won't renew cache
 

@@ -79,7 +79,7 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 
 	public static FusionCacheMemoryEntry<TValue> CreateFromOptions(object? value, long? timestamp, string[]? tags, FusionCacheEntryOptions options, bool isStale, long? lastModifiedTimestamp, string? etag)
 	{
-		// pick base duration for logical expiration
+		var anchor = timestamp ?? FusionCacheInternalUtils.GetCurrentTimestamp();
 		TimeSpan baseDuration;
 		if (isStale)
 		{
@@ -93,25 +93,44 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 		{
 			baseDuration = options.Duration;
 		}
-		var now = DateTimeOffset.UtcNow;
+
 		var exp = FusionCacheInternalUtils.GetNormalizedAbsoluteExpirationTimestamp(baseDuration, options, isStale == false);
-		// if sliding and explicit duration limit
-		if (options.SlidingExpiration.HasValue && isStale == false && options.IsDurationExplicitlySet)
+
+		long? absoluteExpirationTimestamp = null;
+		if (isStale == false)
 		{
-			var anchor = timestamp ?? FusionCacheInternalUtils.GetCurrentTimestamp();
-			var absLimit = anchor + options.Duration.Ticks;
-			if (exp > absLimit)
-				exp = absLimit;
+			if (options.IsDurationExplicitlySet)
+			{
+				// Capture the hard Duration cap so we can enforce it when the sliding window is renewed later on.
+				absoluteExpirationTimestamp = anchor + options.Duration.Ticks;
+				if (options.SlidingExpiration.HasValue && exp > absoluteExpirationTimestamp.Value)
+					exp = absoluteExpirationTimestamp.Value;
+			}
 		}
-		FusionCacheEntryMetadata? metadata = null;
-		if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))
+
+		long? slidingDurationTicks = null;
+		if (isStale == false && options.SlidingExpiration.HasValue)
 		{
-			var eagerExp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(isStale, options.EagerRefreshThreshold, exp);
-			metadata = new FusionCacheEntryMetadata(isStale, eagerExp, etag, lastModifiedTimestamp, options.Size, (byte)options.Priority);
+			slidingDurationTicks = options.SlidingExpiration.Value.Ticks;
 		}
+
+		long? jitterMaxDurationTicks = null;
+		if (isStale == false && options.JitterMaxDuration > TimeSpan.Zero)
+		{
+			jitterMaxDurationTicks = options.JitterMaxDuration.Ticks;
+		}
+
+			FusionCacheEntryMetadata? metadata = null;
+			if (FusionCacheInternalUtils.RequiresMetadata(options, isStale, lastModifiedTimestamp, etag))
+			{
+				var eagerExp = FusionCacheInternalUtils.GetNormalizedEagerExpirationTimestamp(isStale, options.EagerRefreshThreshold, exp);
+				// Persist the sliding configuration so we can reconstruct it on future reads (eg, after L2 round-trips).
+				metadata = new FusionCacheEntryMetadata(isStale, eagerExp, etag, lastModifiedTimestamp, options.Size, (byte)options.Priority, slidingDurationTicks, absoluteExpirationTimestamp, jitterMaxDurationTicks);
+			}
+
 		return new FusionCacheMemoryEntry<TValue>(
 			value,
-			timestamp ?? FusionCacheInternalUtils.GetCurrentTimestamp(),
+			anchor,
 			exp,
 			tags,
 			metadata
@@ -132,7 +151,10 @@ internal sealed class FusionCacheMemoryEntry<TValue>
 				entry.Metadata?.ETag,
 				entry.Metadata?.LastModifiedTimestamp,
 				entry.Metadata?.Size,
-				entry.Metadata?.Priority
+				entry.Metadata?.Priority,
+				entry.Metadata?.SlidingDurationTicks,
+				entry.Metadata?.AbsoluteExpirationTimestampTicks,
+				entry.Metadata?.JitterMaxDurationTicks
 			);
 		}
 
