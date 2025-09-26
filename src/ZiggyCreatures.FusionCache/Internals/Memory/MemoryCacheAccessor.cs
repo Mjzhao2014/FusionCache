@@ -89,7 +89,10 @@ internal sealed class MemoryCacheAccessor
 				foreach (var k in keysToEvict)
 				{
 					// mark policy name so eviction event can reflect capacity reason
-					_events.MarkEviction(k, _options.EvictionPolicy.Name);
+					if (_events.HasEvictionSubscribers())
+					{
+						_events.MarkEviction(k, _options.EvictionPolicy.Name);
+					}
 					RemoveEntry(operationId, k);
 				}
 			}

@@ -31,4 +31,63 @@ public class FusionCacheEvictionPolicyConfig
 	/// The maximum number of entries to evict when eviction is triggered.
 	/// </summary>
 	public int MaxEvictionBatchSize { get; set; } = 1000;
+
+	internal void Validate()
+	{
+		if (MaxEntryCount.HasValue && MaxEntryCount.Value <= 0)
+			throw new ArgumentOutOfRangeException(nameof(MaxEntryCount), "MaxEntryCount must be greater than zero.");
+
+		if (EvictionThreshold <= 0 || EvictionThreshold > 1)
+			throw new ArgumentOutOfRangeException(nameof(EvictionThreshold), "EvictionThreshold must be between 0 (exclusive) and 1 (inclusive).");
+
+		if (EvictionPercentage <= 0 || EvictionPercentage > 1)
+			throw new ArgumentOutOfRangeException(nameof(EvictionPercentage), "EvictionPercentage must be between 0 (exclusive) and 1 (inclusive).");
+
+		if (MinEvictionBatchSize <= 0)
+			throw new ArgumentOutOfRangeException(nameof(MinEvictionBatchSize), "MinEvictionBatchSize must be greater than zero.");
+
+		if (MaxEvictionBatchSize <= 0)
+			throw new ArgumentOutOfRangeException(nameof(MaxEvictionBatchSize), "MaxEvictionBatchSize must be greater than zero.");
+
+		if (MaxEvictionBatchSize < MinEvictionBatchSize)
+			throw new ArgumentException("MaxEvictionBatchSize must be greater than or equal to MinEvictionBatchSize.", nameof(MaxEvictionBatchSize));
+	}
+
+	internal int CalculateEvictionBatchSize(int currentCount)
+	{
+		if (currentCount <= 0)
+			return 0;
+
+		if (MaxEntryCount is not int capacity || capacity <= 0)
+			return 0;
+
+		bool thresholdInclusive = EvictionThreshold < 1.0;
+		int triggerCount;
+		if (thresholdInclusive)
+		{
+			triggerCount = (int)Math.Ceiling(capacity * EvictionThreshold);
+			if (triggerCount <= 0)
+				triggerCount = 1;
+			if (currentCount < triggerCount)
+				return 0;
+		}
+		else
+		{
+			triggerCount = capacity;
+			if (currentCount <= triggerCount)
+				return 0;
+		}
+
+		int minimumRequired = thresholdInclusive
+			? Math.Max(1, currentCount - triggerCount + 1)
+			: currentCount - triggerCount;
+
+		var desired = (int)Math.Ceiling(capacity * EvictionPercentage);
+		desired = Math.Max(desired, minimumRequired);
+		desired = Math.Max(desired, MinEvictionBatchSize);
+		desired = Math.Min(desired, MaxEvictionBatchSize);
+		desired = Math.Min(desired, currentCount);
+
+		return desired;
+	}
 }

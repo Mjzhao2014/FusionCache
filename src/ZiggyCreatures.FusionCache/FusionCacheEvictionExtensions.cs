@@ -15,6 +15,7 @@ public static class FusionCacheEvictionExtensions
 	public static IFusionCacheBuilder WithLruEviction(this IFusionCacheBuilder builder, int maxEntryCount, double evictionPercentage = 0.1)
 	{
 		if (builder == null) throw new ArgumentNullException(nameof(builder));
+		if (maxEntryCount <= 0) throw new ArgumentException("maxEntryCount must be greater than zero.", nameof(maxEntryCount));
 		return builder.WithLruEviction(new FusionCacheEvictionPolicyConfig
 		{
 			MaxEntryCount = maxEntryCount,
@@ -29,12 +30,9 @@ public static class FusionCacheEvictionExtensions
 	{
 		if (builder == null) throw new ArgumentNullException(nameof(builder));
 		if (config == null) throw new ArgumentNullException(nameof(config));
-		// ensure options object exists and assign policy
-		if (builder.Options == null)
-		{
-			builder.Options = new FusionCacheOptions();
-		}
-		builder.Options.EvictionPolicy = new LruEvictionPolicy(config);
+
+		EnsureCanApplyEvictionPolicy(builder);
+		builder.Options!.EvictionPolicy = new LruEvictionPolicy(config);
 		return builder;
 	}
 
@@ -44,6 +42,7 @@ public static class FusionCacheEvictionExtensions
 	public static IFusionCacheBuilder WithLfuEviction(this IFusionCacheBuilder builder, int maxEntryCount, double evictionPercentage = 0.1)
 	{
 		if (builder == null) throw new ArgumentNullException(nameof(builder));
+		if (maxEntryCount <= 0) throw new ArgumentException("maxEntryCount must be greater than zero.", nameof(maxEntryCount));
 		return builder.WithLfuEviction(new FusionCacheEvictionPolicyConfig
 		{
 			MaxEntryCount = maxEntryCount,
@@ -58,11 +57,21 @@ public static class FusionCacheEvictionExtensions
 	{
 		if (builder == null) throw new ArgumentNullException(nameof(builder));
 		if (config == null) throw new ArgumentNullException(nameof(config));
-		if (builder.Options == null)
+
+		EnsureCanApplyEvictionPolicy(builder);
+		builder.Options!.EvictionPolicy = new LfuEvictionPolicy(config);
+		return builder;
+	}
+
+	private static void EnsureCanApplyEvictionPolicy(IFusionCacheBuilder builder)
+	{
+		if (builder.Options?.EvictionPolicy is not null)
+			throw new ArgumentException("An eviction policy has already been configured for this builder.", nameof(builder));
+
+		if (builder.Options is null)
 		{
 			builder.Options = new FusionCacheOptions();
 		}
-		builder.Options.EvictionPolicy = new LfuEvictionPolicy(config);
-		return builder;
+		builder.UseRegisteredOptions = false;
 	}
 }

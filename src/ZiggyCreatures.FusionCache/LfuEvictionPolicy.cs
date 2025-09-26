@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using ZiggyCreatures.Caching.Fusion.Internals;
 
 namespace ZiggyCreatures.Caching.Fusion;
@@ -16,7 +15,7 @@ public class LfuEvictionPolicy
 	{
 		public int Frequency;
 		public LinkedList<string> Keys = new();
-		public LinkedListNode<FrequencyGroup> GroupNode;
+		public LinkedListNode<FrequencyGroup> GroupNode = null!;
 	}
 
 	private readonly Dictionary<string, LinkedListNode<string>> _keyNodes = new();
@@ -37,6 +36,7 @@ public class LfuEvictionPolicy
 	public LfuEvictionPolicy(FusionCacheEvictionPolicyConfig config)
 	{
 		Config = config ?? throw new ArgumentNullException(nameof(config));
+		Config.Validate();
 	}
 
 	private FrequencyGroup GetOrCreateFreqGroupAfter(FrequencyGroup? previousGroup, int freq)
@@ -142,29 +142,26 @@ public class LfuEvictionPolicy
 	{
 		lock (_lock)
 		{
-			if (Config.MaxEntryCount is null)
+			var toEvict = Config.CalculateEvictionBatchSize(_count);
+			if (toEvict <= 0)
 				yield break;
-			var capacity = Config.MaxEntryCount.Value;
-			if (_count <= capacity * Config.EvictionThreshold)
-				yield break;
-			var toEvict = (int)Math.Round(capacity * Config.EvictionPercentage);
-			if (toEvict < Config.MinEvictionBatchSize)
-				toEvict = Config.MinEvictionBatchSize;
-			if (toEvict > Config.MaxEvictionBatchSize)
-				toEvict = Config.MaxEvictionBatchSize;
+
+			var remaining = toEvict;
 			var groupNode = _freqList.First;
-			var evicted = 0;
-			while (groupNode != null && evicted < toEvict)
+			while (groupNode != null && remaining > 0)
 			{
-				var group = groupNode.Value;
+				var currentGroupNode = groupNode;
+				var nextGroupNode = currentGroupNode.Next;
+				var group = currentGroupNode.Value;
 				var keyNode = group.Keys.Last;
-				while (keyNode != null && evicted < toEvict)
+				while (keyNode != null && remaining > 0)
 				{
-					yield return keyNode.Value;
-					evicted++;
-					keyNode = keyNode.Previous;
+					var currentKeyNode = keyNode;
+					keyNode = currentKeyNode.Previous;
+					remaining--;
+					yield return currentKeyNode.Value;
 				}
-				groupNode = groupNode.Next;
+				groupNode = nextGroupNode;
 			}
 		}
 	}

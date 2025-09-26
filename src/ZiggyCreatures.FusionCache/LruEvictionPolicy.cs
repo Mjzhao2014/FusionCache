@@ -26,6 +26,7 @@ public class LruEvictionPolicy
 	public LruEvictionPolicy(FusionCacheEvictionPolicyConfig config)
 	{
 		Config = config ?? throw new ArgumentNullException(nameof(config));
+		Config.Validate();
 	}
 
 	/// <inheritdoc/>
@@ -74,25 +75,18 @@ public class LruEvictionPolicy
 	{
 		lock (_lock)
 		{
-			if (Config.MaxEntryCount is null)
+			var toEvict = Config.CalculateEvictionBatchSize(_nodes.Count);
+			if (toEvict <= 0)
 				yield break;
-			var capacity = Config.MaxEntryCount.Value;
-			// check threshold
-			if (_nodes.Count <= capacity * Config.EvictionThreshold)
-				yield break;
-			// compute number to evict
-			var toEvict = (int)Math.Round(capacity * Config.EvictionPercentage);
-			if (toEvict < Config.MinEvictionBatchSize)
-				toEvict = Config.MinEvictionBatchSize;
-			if (toEvict > Config.MaxEvictionBatchSize)
-				toEvict = Config.MaxEvictionBatchSize;
-			var count = 0;
+
+			var remaining = toEvict;
 			var node = _usageList.Last;
-			while (node != null && count < toEvict)
+			while (node != null && remaining > 0)
 			{
-				yield return node.Value;
-				node = node.Previous;
-				count++;
+				var current = node;
+				node = current.Previous;
+				remaining--;
+				yield return current.Value;
 			}
 		}
 	}
