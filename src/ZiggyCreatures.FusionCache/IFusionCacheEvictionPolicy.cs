@@ -42,4 +42,9 @@ public interface IFusionCacheEvictionPolicy
 	/// will invoke <see cref="OnRemove(string)"/> for each returned key as removal occurs.
 	/// </summary>
 	IEnumerable<string> GetKeysToEvict();
+
+	/// <summary>
+	/// Creates a new policy instance with the same configuration and initial state.
+	/// </summary>
+	IFusionCacheEvictionPolicy Duplicate();
 }

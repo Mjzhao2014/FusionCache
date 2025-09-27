@@ -90,4 +90,10 @@ public class LruEvictionPolicy
 			}
 		}
 	}
+
+	/// <inheritdoc/>
+	public IFusionCacheEvictionPolicy Duplicate()
+	{
+		return new LruEvictionPolicy(Config.Duplicate());
+	}
 }

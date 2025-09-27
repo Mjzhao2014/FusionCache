@@ -165,4 +165,10 @@ public class LfuEvictionPolicy
 			}
 		}
 	}
+
+	/// <inheritdoc/>
+	public IFusionCacheEvictionPolicy Duplicate()
+	{
+		return new LfuEvictionPolicy(Config.Duplicate());
+	}
 }

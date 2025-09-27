@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -605,12 +606,10 @@ public class FusionCacheOptions
 
 			PluginsErrorsLogLevel = PluginsErrorsLogLevel,
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
-			
+
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
 
-			// NOTE: the eviction policy instance is carried over by reference (no deep clone),
-			// so subsequent modifications to the policy instance will be visible in the duplicate.
-			EvictionPolicy = EvictionPolicy,
+			EvictionPolicy = EvictionPolicy?.Duplicate(),
 		};
 
 		return res;

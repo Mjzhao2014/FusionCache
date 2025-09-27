@@ -32,6 +32,21 @@ public class FusionCacheEvictionPolicyConfig
 	/// </summary>
 	public int MaxEvictionBatchSize { get; set; } = 1000;
 
+	/// <summary>
+	/// Creates a copy of this configuration instance.
+	/// </summary>
+	public FusionCacheEvictionPolicyConfig Duplicate()
+	{
+		return new FusionCacheEvictionPolicyConfig
+		{
+			MaxEntryCount = MaxEntryCount,
+			EvictionThreshold = EvictionThreshold,
+			EvictionPercentage = EvictionPercentage,
+			MinEvictionBatchSize = MinEvictionBatchSize,
+			MaxEvictionBatchSize = MaxEvictionBatchSize,
+		};
+	}
+
 	internal void Validate()
 	{
 		if (MaxEntryCount.HasValue && MaxEntryCount.Value <= 0)
