@@ -58,9 +58,6 @@ internal partial class DistributedCacheAccessor
 
 	public bool SetEntry<TValue>(string operationId, string key, IFusionCacheEntry entry, FusionCacheEntryOptions options, bool isBackground, CancellationToken token)
 	{
-		if (IsCurrentlyUsable(operationId, key) == false)
-			return false;
-
 		token.ThrowIfCancellationRequested();
 
 		// ACTIVITY
@@ -271,9 +268,6 @@ internal partial class DistributedCacheAccessor
 
 	public bool RemoveEntry(string operationId, string key, FusionCacheEntryOptions options, bool isBackground, CancellationToken token)
 	{
-		if (IsCurrentlyUsable(operationId, key) == false)
-			return false;
-
 		// ACTIVITY
 		using var activity = Activities.SourceDistributedLevel.StartActivityWithCommonTags(Activities.Names.DistributedRemove, _options.CacheName, _options.InstanceId!, key, operationId, CacheLevelKind.Distributed);
 

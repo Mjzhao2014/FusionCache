@@ -27,11 +27,18 @@ internal sealed class AdvancedCircuitBreaker
 	{
 		if (failureThreshold <= 0d || failureThreshold > 1d)
 		{
-			throw new ArgumentOutOfRangeException(nameof(failureThreshold), "Failure threshold must be in the range (0,1].");
+			throw new ArgumentOutOfRangeException(nameof(failureThreshold), failureThreshold, "Failure threshold must be in the range (0,1].");
 		}
+		if (samplingDuration <= TimeSpan.Zero)
+			throw new ArgumentOutOfRangeException(nameof(samplingDuration), samplingDuration, "Sampling duration must be greater than zero.");
+		if (minimumThroughput <= 0)
+			throw new ArgumentOutOfRangeException(nameof(minimumThroughput), minimumThroughput, "Minimum throughput must be greater than zero.");
+		if (jitterMaxDuration < TimeSpan.Zero)
+			throw new ArgumentOutOfRangeException(nameof(jitterMaxDuration), jitterMaxDuration, "The jitter duration cannot be negative.");
+
 		_failureThreshold = failureThreshold;
 		_samplingDuration = samplingDuration;
-		_minimumThroughput = Math.Max(1, minimumThroughput);
+		_minimumThroughput = minimumThroughput;
 		_breakDuration = breakDuration;
 		_jitterMaxDuration = jitterMaxDuration;
 		_state = (int)CircuitBreakerState.Closed;
@@ -118,13 +125,23 @@ internal sealed class AdvancedCircuitBreaker
 		{
 			EnsureWindow();
 			Interlocked.Increment(ref _successCount);
-			// evaluate on success to possibly close transition: success can bring down error rate, but will not trip open.
+			Evaluate(out var evaluateStateChanged);
+			if (evaluateStateChanged)
+			{
+				isStateChanged = true;
+			}
+			// re-evaluate failure rate after recording the success to determine if the window crosses the threshold.
 		}
 	}
 
 	public void RecordFailure(out bool isStateChanged)
 	{
 		isStateChanged = false;
+		if (_breakDuration <= TimeSpan.Zero)
+		{
+			Interlocked.Increment(ref _failureCount);
+			return;
+		}
 		var currState = (CircuitBreakerState)Volatile.Read(ref _state);
 		if (currState == CircuitBreakerState.HalfOpen)
 		{
@@ -152,6 +169,11 @@ internal sealed class AdvancedCircuitBreaker
 
 	private void Open(out bool isStateChanged)
 	{
+		if (_breakDuration <= TimeSpan.Zero)
+		{
+			isStateChanged = false;
+			return;
+		}
 		var dur = _breakDuration;
 		if (_jitterMaxDuration > TimeSpan.Zero)
 		{

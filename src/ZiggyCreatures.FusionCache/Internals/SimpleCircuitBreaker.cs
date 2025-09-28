@@ -25,7 +25,13 @@ internal sealed class SimpleCircuitBreaker
 	/// <param name="jitterMaxDuration">An optional maximum duration to add jitter to the break duration to avoid thundering herds.</param>
 	public SimpleCircuitBreaker(int failuresAllowedBeforeBreaking, TimeSpan breakDuration, TimeSpan jitterMaxDuration = default)
 	{
-		_failuresAllowedBeforeBreaking = Math.Max(1, failuresAllowedBeforeBreaking);
+		if (failuresAllowedBeforeBreaking <= 0)
+			throw new ArgumentOutOfRangeException(nameof(failuresAllowedBeforeBreaking), failuresAllowedBeforeBreaking, "The number of allowed failures must be greater than zero.");
+
+		if (jitterMaxDuration < TimeSpan.Zero)
+			throw new ArgumentOutOfRangeException(nameof(jitterMaxDuration), jitterMaxDuration, "The jitter duration cannot be negative.");
+
+		_failuresAllowedBeforeBreaking = failuresAllowedBeforeBreaking;
 		_breakDuration = breakDuration;
 		_jitterMaxDuration = jitterMaxDuration;
 		_state = (int)CircuitBreakerState.Closed;
@@ -96,6 +102,11 @@ internal sealed class SimpleCircuitBreaker
 	public void RecordFailure(out bool isStateChanged)
 	{
 		isStateChanged = false;
+		if (_breakDuration <= TimeSpan.Zero)
+		{
+			Interlocked.Increment(ref _currentFailureCount);
+			return;
+		}
 		var currState = (CircuitBreakerState)Volatile.Read(ref _state);
 		if (currState == CircuitBreakerState.HalfOpen)
 		{
@@ -123,6 +134,11 @@ internal sealed class SimpleCircuitBreaker
 
 	private void Open(out bool isStateChanged)
 	{
+		if (_breakDuration <= TimeSpan.Zero)
+		{
+			isStateChanged = false;
+			return;
+		}
 		// compose break duration with jitter
 		var dur = _breakDuration;
 		if (_jitterMaxDuration > TimeSpan.Zero)

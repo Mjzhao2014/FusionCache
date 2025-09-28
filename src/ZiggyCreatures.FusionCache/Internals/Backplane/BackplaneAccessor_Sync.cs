@@ -88,12 +88,6 @@ internal partial class BackplaneAccessor
 
 		var cacheKey = message.CacheKey!;
 
-		// CHECK: CURRENTLY NOT USABLE
-		if (IsCurrentlyUsable(operationId, cacheKey) == false)
-		{
-			return false;
-		}
-
 		token.ThrowIfCancellationRequested();
 
 		// ACTIVITY
