@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
+using ZiggyCreatures.Caching.Fusion;
 
 namespace ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 
@@ -20,6 +21,14 @@ internal partial class DistributedCacheAccessor
 
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, key);
+			// on success inform the breaker
+			_breaker.RecordSuccess(out var stateChanged);
+			if (stateChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, key, _breaker.State);
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [DC] distributed cache circuit breaker changed state to {State}", _options.CacheName, _options.InstanceId, operationId, key, _breaker.State);
+			}
 		}
 		catch (Exception exc)
 		{
