@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Threading;
 using System.Reflection;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Hybrid;
@@ -190,6 +191,25 @@ public static class TestsUtils
 	public static IFusionCachePlugin[]? GetPlugins(IFusionCache cache)
 	{
 		return (typeof(FusionCache).GetField("_plugins", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache) as List<IFusionCachePlugin>)?.ToArray();
+	}
+
+	public static bool WaitForCircuitBreakerStateCount(Dictionary<CircuitBreakerState, int> stateCounts, CircuitBreakerState state, int expectedCount, TimeSpan timeout)
+	{
+		return SpinWait.SpinUntil(() =>
+		{
+			lock (stateCounts)
+			{
+				return stateCounts.TryGetValue(state, out var current) && current >= expectedCount;
+			}
+		}, timeout);
+	}
+
+	public static int GetCircuitBreakerStateCount(Dictionary<CircuitBreakerState, int> stateCounts, CircuitBreakerState state)
+	{
+		lock (stateCounts)
+		{
+			return stateCounts.TryGetValue(state, out var current) ? current : 0;
+		}
 	}
 
 	private static readonly TimeSpan StopwatchExtraPadding = TimeSpan.FromMilliseconds(5);

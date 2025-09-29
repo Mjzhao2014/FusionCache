@@ -404,8 +404,8 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
 
-		Thread.Sleep(100); // wait for event to be processed
-		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]);
+		Assert.True(TestsUtils.WaitForCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Open, 1, TimeSpan.FromSeconds(2)), "Circuit breaker open event not received in time");
+		Assert.Equal(1, TestsUtils.GetCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Open));
 
 		// STEP 2: Wait for break duration, then trigger half-open transition
 		await Task.Delay(durationOfBreak.PlusALittleBit());
@@ -415,11 +415,12 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		// 2. After SetAsync succesfully, the circuit breaker will be closed and fire closed event
 		await fusionCache.SetAsync(key + "_recovery", value);
 		
-		Thread.Sleep(100); // wait for event to be processed
+		Assert.True(TestsUtils.WaitForCircuitBreakerStateCount(stateCounts, CircuitBreakerState.HalfOpen, 1, TimeSpan.FromSeconds(2)), "Circuit breaker half-open event not received in time");
+		Assert.True(TestsUtils.WaitForCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Closed, 1, TimeSpan.FromSeconds(2)), "Circuit breaker closed event not received in time");
 		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetDistributedCacheCircuitBreakerState(fusionCache));
-		Assert.Equal(1, stateCounts[CircuitBreakerState.HalfOpen]);
-		Assert.Equal(1, stateCounts[CircuitBreakerState.Closed]); 
-		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]); //unchanged
+		Assert.Equal(1, TestsUtils.GetCircuitBreakerStateCount(stateCounts, CircuitBreakerState.HalfOpen));
+		Assert.Equal(1, TestsUtils.GetCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Closed));
+		Assert.Equal(1, TestsUtils.GetCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Open)); //unchanged
 	}
 
 	[Fact]
@@ -469,8 +470,8 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 
 		Assert.Equal(CircuitBreakerState.Open, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
 
-		Thread.Sleep(100); // wait for event to be processed
-		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]);
+		Assert.True(TestsUtils.WaitForCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Open, 1, TimeSpan.FromSeconds(2)), "Circuit breaker open event not received in time");
+		Assert.Equal(1, TestsUtils.GetCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Open));
 
 		// STEP 2: Wait for break duration, then trigger half-open transition
 		await Task.Delay(durationOfBreak.PlusALittleBit());
@@ -480,11 +481,12 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		// 2. The setasync will be successful and circuit will be closed and fire closed event
 		await fusionCache.SetAsync(key + "_recovery", value);
 
-		Thread.Sleep(100); // wait for event to be processed
 		Assert.Equal(CircuitBreakerState.Closed, TestsUtils.GetBackplaneCircuitBreakerState(fusionCache));
-		Assert.Equal(1, stateCounts[CircuitBreakerState.HalfOpen]);
-		Assert.Equal(1, stateCounts[CircuitBreakerState.Closed]); // Still one open event
-		Assert.Equal(1, stateCounts[CircuitBreakerState.Open]); //unchanged
+		Assert.True(TestsUtils.WaitForCircuitBreakerStateCount(stateCounts, CircuitBreakerState.HalfOpen, 1, TimeSpan.FromSeconds(2)), "Circuit breaker half-open event not received in time");
+		Assert.True(TestsUtils.WaitForCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Closed, 1, TimeSpan.FromSeconds(2)), "Circuit breaker closed event not received in time");
+		Assert.Equal(1, TestsUtils.GetCircuitBreakerStateCount(stateCounts, CircuitBreakerState.HalfOpen));
+		Assert.Equal(1, TestsUtils.GetCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Closed)); // Still one open event
+		Assert.Equal(1, TestsUtils.GetCircuitBreakerStateCount(stateCounts, CircuitBreakerState.Open)); //unchanged
 	}
 
 }
