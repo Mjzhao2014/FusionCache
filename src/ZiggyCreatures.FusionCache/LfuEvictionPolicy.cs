@@ -140,29 +140,38 @@ public class LfuEvictionPolicy
 	/// <inheritdoc/>
 	public IEnumerable<string> GetKeysToEvict()
 	{
+		List<string>? snapshot = null;
 		lock (_lock)
 		{
 			var toEvict = Config.CalculateEvictionBatchSize(_count);
-			if (toEvict <= 0)
-				yield break;
-
-			var remaining = toEvict;
-			var groupNode = _freqList.First;
-			while (groupNode != null && remaining > 0)
+			if (toEvict > 0)
 			{
-				var currentGroupNode = groupNode;
-				var nextGroupNode = currentGroupNode.Next;
-				var group = currentGroupNode.Value;
-				var keyNode = group.Keys.Last;
-				while (keyNode != null && remaining > 0)
+				snapshot = new List<string>(Math.Min(toEvict, _count));
+				var remaining = toEvict;
+				var groupNode = _freqList.First;
+				while (groupNode != null && remaining > 0)
 				{
-					var currentKeyNode = keyNode;
-					keyNode = currentKeyNode.Previous;
-					remaining--;
-					yield return currentKeyNode.Value;
+					var currentGroupNode = groupNode;
+					var nextGroupNode = currentGroupNode.Next;
+					var group = currentGroupNode.Value;
+					var keyNode = group.Keys.Last;
+					while (keyNode != null && remaining > 0)
+					{
+						snapshot.Add(keyNode.Value);
+						keyNode = keyNode.Previous;
+						remaining--;
+					}
+					groupNode = nextGroupNode;
 				}
-				groupNode = nextGroupNode;
 			}
+		}
+
+		if (snapshot == null)
+			yield break;
+
+		foreach (var key in snapshot)
+		{
+			yield return key;
 		}
 	}
 

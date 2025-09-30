@@ -73,21 +73,28 @@ public class LruEvictionPolicy
 	/// <inheritdoc/>
 	public IEnumerable<string> GetKeysToEvict()
 	{
+		List<string>? snapshot = null;
 		lock (_lock)
 		{
 			var toEvict = Config.CalculateEvictionBatchSize(_nodes.Count);
-			if (toEvict <= 0)
-				yield break;
-
-			var remaining = toEvict;
-			var node = _usageList.Last;
-			while (node != null && remaining > 0)
+			if (toEvict > 0)
 			{
-				var current = node;
-				node = current.Previous;
-				remaining--;
-				yield return current.Value;
+				snapshot = new List<string>(Math.Min(toEvict, _nodes.Count));
+				var node = _usageList.Last;
+				while (node != null && snapshot.Count < toEvict)
+				{
+					snapshot.Add(node.Value);
+					node = node.Previous;
+				}
 			}
+		}
+
+		if (snapshot == null)
+			yield break;
+
+		foreach (var key in snapshot)
+		{
+			yield return key;
 		}
 	}
 
