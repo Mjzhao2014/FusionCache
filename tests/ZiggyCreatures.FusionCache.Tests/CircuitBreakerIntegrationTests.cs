@@ -438,6 +438,7 @@ public class CircuitBreakerIntegrationTests : AbstractTests
 		options.EnableAutoRecovery = false;
 		options.BackplaneCircuitBreakerFailuresAllowedBeforeBreaking = maxFailuresBeforeBreaking;
 		options.BackplaneCircuitBreakerDuration = durationOfBreak;
+		options.WaitForInitialBackplaneSubscribe = true;
 		using var fusionCache = new FusionCache(options, memoryCache);
 		fusionCache.DefaultEntryOptions.AllowBackgroundBackplaneOperations = false;
 
