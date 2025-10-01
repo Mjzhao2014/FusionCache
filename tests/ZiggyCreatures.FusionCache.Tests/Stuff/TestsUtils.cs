@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using System.Threading;
 using System.Reflection;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Hybrid;
@@ -8,7 +7,6 @@ using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Backplane;
 using ZiggyCreatures.Caching.Fusion.Backplane.StackExchangeRedis;
-using ZiggyCreatures.Caching.Fusion.Internals;
 using ZiggyCreatures.Caching.Fusion.Internals.Backplane;
 using ZiggyCreatures.Caching.Fusion.Internals.Distributed;
 using ZiggyCreatures.Caching.Fusion.Locking;
