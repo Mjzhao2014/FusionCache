@@ -86,12 +86,21 @@ internal sealed class MemoryCacheAccessor
 			{
 				_options.EvictionPolicy.OnSet(key, entry.Metadata);
 				var keysToEvict = _options.EvictionPolicy.GetKeysToEvict();
+				var hasEvictionSubscribers = _events.HasEvictionSubscribers();
 				foreach (var k in keysToEvict)
 				{
-					// mark policy name so eviction event can reflect capacity reason
-					if (_events.HasEvictionSubscribers())
+					if (hasEvictionSubscribers)
 					{
-						_events.MarkEviction(k, _options.EvictionPolicy.Name);
+						if (_cache.TryGetValue<IFusionCacheMemoryEntry>(k, out var entryToEvict))
+						{
+							// capture timestamp so we can validate the eviction marker during the callback
+							_events.MarkEviction(k, _options.EvictionPolicy.Name, entryToEvict.Timestamp);
+						}
+						else
+						{
+							// ensure we don't leave stale markers if the entry already disappeared
+							_events.ClearMarkedEviction(k);
+						}
 					}
 					RemoveEntry(operationId, k);
 				}

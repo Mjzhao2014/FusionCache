@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Internals;
@@ -14,7 +15,19 @@ public sealed class FusionCacheMemoryEventsHub
 	: FusionCacheCommonEventsHub
 {
 	// keep track of entries being removed explicitly due to capacity-based eviction so we can override the eviction reason
-	private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _markedEvictions = new();
+	private readonly ConcurrentDictionary<string, MarkedEvictionInfo> _markedEvictions = new();
+
+	private readonly struct MarkedEvictionInfo
+	{
+		public MarkedEvictionInfo(string? policyName, long? timestamp)
+		{
+			PolicyName = policyName;
+			Timestamp = timestamp;
+		}
+
+		public string? PolicyName { get; }
+		public long? Timestamp { get; }
+	}
 	/// <summary>
 	/// Initializes a new instance of the <see cref="FusionCacheMemoryEventsHub" /> class.
 	/// </summary>
@@ -65,18 +78,34 @@ public sealed class FusionCacheMemoryEventsHub
 	/// Marks a key as being removed due to capacity-based eviction, so that arguments such as policy name
 	/// can be supplied to the eviction callback.
 	/// </summary>
-	internal void MarkEviction(string key, string? policyName)
+	internal void MarkEviction(string key, string? policyName, long? entryTimestamp)
 	{
-		_markedEvictions[key] = policyName;
+		_markedEvictions[key] = new MarkedEvictionInfo(policyName, entryTimestamp);
 	}
 
 	/// <summary>
 	/// Attempt to retrieve and clear any marker for an eviction that was explicitly triggered by capacity.
 	/// Returns true if the key had been marked.
 	/// </summary>
-	internal bool TryTakeMarkedEviction(string key, out string? policyName)
+	internal bool TryTakeMarkedEviction(string key, long? entryTimestamp, out string? policyName, out bool matched)
 	{
-		return _markedEvictions.TryRemove(key, out policyName);
+		policyName = null;
+		matched = false;
+
+		if (_markedEvictions.TryRemove(key, out var info) == false)
+		{
+			return false;
+		}
+
+		policyName = info.PolicyName;
+		matched = info.Timestamp is null || entryTimestamp is null || info.Timestamp.Value == entryTimestamp.Value;
+
+		return true;
+	}
+
+	internal void ClearMarkedEviction(string key)
+	{
+		_markedEvictions.TryRemove(key, out _);
 	}
 
 	internal void OnExpire(string operationId, string key)

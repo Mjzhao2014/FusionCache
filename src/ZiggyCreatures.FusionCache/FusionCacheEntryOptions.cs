@@ -981,7 +981,9 @@ public sealed class FusionCacheEntryOptions
 
 					// if this key was flagged for capacity-based eviction, override the reason and capture the policy name
 					string? policyName = null;
-					if (hub?.TryTakeMarkedEviction(keyStr, out policyName) == true)
+					bool matched = false;
+					var entryTimestamp = (entry as IFusionCacheMemoryEntry)?.Timestamp;
+					if (hub?.TryTakeMarkedEviction(keyStr, entryTimestamp, out policyName, out matched) == true && matched && reason == EvictionReason.Removed)
 					{
 						reason = EvictionReason.Capacity;
 					}
