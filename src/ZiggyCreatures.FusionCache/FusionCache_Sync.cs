@@ -81,7 +81,7 @@ public partial class FusionCache
 		});
 	}
 
-	private IFusionCacheMemoryEntry? GetOrSetEntryInternal<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
+	private (IFusionCacheMemoryEntry? Entry, bool HasNewValue) GetOrSetEntryInternal<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
 	{
 		options ??= _defaultEntryOptions;
 
@@ -136,7 +136,7 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
-			return memoryEntry;
+			return (memoryEntry, false);
 		}
 
 		IFusionCacheMemoryEntry? entry;
@@ -151,15 +151,13 @@ public partial class FusionCache
 			if (memoryLockObj is null && options.IsFailSafeEnabled && memoryEntry is not null)
 			{
 				// IF THE MEMORY LOCK HAS NOT BEEN ACQUIRED
-
 				// + THERE IS A FALLBACK ENTRY
 				// + FAIL-SAFE IS ENABLED
 				// --> USE IT (WITHOUT SAVING IT, SINCE THE ALREADY RUNNING FACTORY WILL DO IT ANYWAY)
 
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry.IsStale(), activity);
-
-				return memoryEntry;
+				return (memoryEntry, false);
 			}
 
 			// TRY AGAIN WITH MEMORY CACHE (AFTER THE MEMORY LOCK HAS BEEN ACQUIRED, MAYBE SOMETHING CHANGED)
@@ -182,7 +180,7 @@ public partial class FusionCache
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
-				return memoryEntry;
+				return (memoryEntry, false);
 			}
 
 			// TRY WITH DISTRIBUTED CACHE (IF ANY)
@@ -359,7 +357,7 @@ public partial class FusionCache
 			_events.OnMiss(operationId, key, activity);
 		}
 
-		return entry;
+		return (entry, hasNewValue);
 	}
 
 	/// <inheritdoc/>
@@ -391,7 +389,16 @@ public partial class FusionCache
 
 		try
 		{
-			var entry = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token);
+			// ensure options has a value to attach dependencies to
+			options ??= _defaultEntryOptions;
+			var (entry, hasNewValue) = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token);
+			// register any declared dependencies on this entry
+			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+			{
+				// if this set call produced a new value, invalidate any children
+				CascadeInvalidate(operationId, key, token);
+			}
 
 			if (entry is null)
 			{
@@ -439,7 +446,13 @@ public partial class FusionCache
 
 		try
 		{
-			var entry = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, (_, _) => defaultValue, false, default, options, activity, token);
+			options ??= _defaultEntryOptions;
+			var (entry, hasNewValue) = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, (_, _) => defaultValue, false, default, options, activity, token);
+			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+			{
+				CascadeInvalidate(operationId, key, token);
+			}
 
 			if (entry is null)
 			{
@@ -709,6 +722,10 @@ public partial class FusionCache
 
 		try
 		{
+			// ensure we have entry options
+			options ??= _defaultEntryOptions;
+			// Register any dependency edges declared for this entry
+			RegisterDependencies(key, options.Dependencies);
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
@@ -724,6 +741,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			// After setting, cascade invalidation for any children depending on this parent
+			CascadeInvalidate(operationId, key, token);
 		}
 		catch (Exception exc)
 		{
@@ -780,6 +799,7 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		RemoveInternal(key, options, token);
+		CascadeInvalidate(MaybeGenerateOperationId(), key, token);
 	}
 
 	// EXPIRE
@@ -829,6 +849,7 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		ExpireInternal(key, options, token);
+		CascadeInvalidate(MaybeGenerateOperationId(), key, token);
 	}
 
 	// TAGGING

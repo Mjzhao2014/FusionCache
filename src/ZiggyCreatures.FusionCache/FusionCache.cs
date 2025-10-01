@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Collections.Generic;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -61,6 +62,10 @@ public sealed partial class FusionCache
 	// TAGGING
 	private readonly FusionCacheEntryOptions _tagsDefaultEntryOptions;
 	private readonly FusionCacheEntryOptions _cascadeRemoveByTagEntryOptions;
+
+	// DEPENDENCY GRAPH
+	private readonly Dictionary<string, HashSet<string>> _dependencies = new();
+	private readonly object _dependencyGraphLock = new();
 
 	internal readonly string TagInternalCacheKeyPrefix;
 
@@ -274,6 +279,136 @@ public sealed partial class FusionCache
 	{
 		if (_cacheKeyPrefix is not null)
 			key = _cacheKeyPrefix + key;
+	}
+
+	// DEPENDENCIES
+
+	private void RegisterDependencies(string currentKey, DependencyBuilder? deps)
+	{
+		if (deps is null)
+			return;
+		// Attach parent edges: currentKey depends on these parents
+		if (deps.ParentKeys.Count > 0)
+		{
+			foreach (var parentKey in deps.ParentKeys)
+			{
+				AddDependencyEdge(parentKey, currentKey);
+			}
+		}
+		// Attach child edges: currentKey is parent of these children
+		if (deps.ChildKeys.Count > 0)
+		{
+			foreach (var childKey in deps.ChildKeys)
+			{
+				AddDependencyEdge(currentKey, childKey);
+			}
+		}
+	}
+
+	private void AddDependencyEdge(string parentKey, string childKey)
+	{
+		if (string.IsNullOrEmpty(parentKey) || string.IsNullOrEmpty(childKey))
+			return;
+		lock (_dependencyGraphLock)
+		{
+			if (WouldIntroduceCycle(parentKey, childKey))
+			{
+				throw new FusionCacheDependencyCycleException($"Adding dependency edge {parentKey} -> {childKey} would create a cycle");
+			}
+			if (!_dependencies.TryGetValue(parentKey, out var children))
+			{
+				children = new HashSet<string>();
+				_dependencies[parentKey] = children;
+			}
+			children.Add(childKey);
+		}
+	}
+
+	private bool WouldIntroduceCycle(string parentKey, string childKey)
+	{
+		// simple DFS to see if parent is reachable from child
+		if (parentKey == childKey)
+			return true;
+		var visited = new HashSet<string>();
+		var stack = new Stack<string>();
+		stack.Push(childKey);
+		while (stack.Count > 0)
+		{
+			var cur = stack.Pop();
+			if (!visited.Add(cur))
+				continue;
+			if (_dependencies.TryGetValue(cur, out var kids))
+			{
+				foreach (var k in kids)
+				{
+					if (k == parentKey)
+						return true;
+					stack.Push(k);
+				}
+			}
+		}
+		return false;
+	}
+
+	private FusionCacheEntryOptions CreateCascadeEntryOptions()
+	{
+		var opts = _cascadeRemoveByTagEntryOptions.Duplicate();
+		opts.SkipBackplaneNotifications = true;
+		opts.SkipDistributedCacheWrite = _options.Cascade.CascadeToL2 == false;
+		return opts;
+	}
+
+	private void CascadeInvalidate(string operationId, string parentKey, CancellationToken token)
+	{
+		var visited = new HashSet<string>();
+		CascadeInvalidateInternal(operationId, parentKey, visited, 0, token);
+	}
+
+	private void CascadeInvalidateInternal(string operationId, string parentKey, HashSet<string> visited, int depth, CancellationToken token)
+	{
+		if (depth >= _options.Cascade.MaxCascadeDepth)
+			return;
+		List<string> children;
+		lock (_dependencyGraphLock)
+		{
+			if (!_dependencies.TryGetValue(parentKey, out var childSet))
+				return;
+			children = new List<string>(childSet);
+		}
+		foreach (var childKey in children)
+		{
+			if (!visited.Add(childKey))
+				continue;
+			// remove child locally and from distributed cache if configured
+			RemoveInternal(childKey, CreateCascadeEntryOptions(), token);
+			CascadeInvalidateInternal(operationId, childKey, visited, depth + 1, token);
+		}
+	}
+
+	private async ValueTask CascadeInvalidateAsync(string operationId, string parentKey, CancellationToken token)
+	{
+		var visited = new HashSet<string>();
+		await CascadeInvalidateInternalAsync(operationId, parentKey, visited, 0, token).ConfigureAwait(false);
+	}
+
+	private async ValueTask CascadeInvalidateInternalAsync(string operationId, string parentKey, HashSet<string> visited, int depth, CancellationToken token)
+	{
+		if (depth >= _options.Cascade.MaxCascadeDepth)
+			return;
+		List<string> children;
+		lock (_dependencyGraphLock)
+		{
+			if (!_dependencies.TryGetValue(parentKey, out var childSet))
+				return;
+			children = new List<string>(childSet);
+		}
+		foreach (var childKey in children)
+		{
+			if (!visited.Add(childKey))
+				continue;
+			await RemoveInternalAsync(childKey, CreateCascadeEntryOptions(), token).ConfigureAwait(false);
+			await CascadeInvalidateInternalAsync(operationId, childKey, visited, depth + 1, token).ConfigureAwait(false);
+		}
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]

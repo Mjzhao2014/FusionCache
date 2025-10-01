@@ -81,7 +81,7 @@ public partial class FusionCache
 		});
 	}
 
-	private async ValueTask<IFusionCacheMemoryEntry?> GetOrSetEntryInternalAsync<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, Task<TValue>> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
+	private async ValueTask<(IFusionCacheMemoryEntry? Entry, bool HasNewValue)> GetOrSetEntryInternalAsync<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, Task<TValue>> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
 	{
 		options ??= _defaultEntryOptions;
 
@@ -136,7 +136,7 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
-			return memoryEntry;
+			return (memoryEntry, false);
 		}
 
 		IFusionCacheMemoryEntry? entry;
@@ -159,7 +159,7 @@ public partial class FusionCache
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry.IsStale(), activity);
 
-				return memoryEntry;
+				return (memoryEntry, false);
 			}
 
 			// TRY AGAIN WITH MEMORY CACHE (AFTER THE MEMORY LOCK HAS BEEN ACQUIRED, MAYBE SOMETHING CHANGED)
@@ -182,7 +182,7 @@ public partial class FusionCache
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
-				return memoryEntry;
+				return (memoryEntry, false);
 			}
 
 			// TRY WITH DISTRIBUTED CACHE (IF ANY)
@@ -359,7 +359,7 @@ public partial class FusionCache
 			_events.OnMiss(operationId, key, activity);
 		}
 
-		return entry;
+		return (entry, hasNewValue);
 	}
 
 	/// <inheritdoc/>
@@ -391,7 +391,13 @@ public partial class FusionCache
 
 		try
 		{
-			var entry = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token).ConfigureAwait(false);
+			options ??= _defaultEntryOptions;
+			var (entry, hasNewValue) = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token).ConfigureAwait(false);
+			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+			{
+				await CascadeInvalidateAsync(operationId, key, token).ConfigureAwait(false);
+			}
 
 			if (entry is null)
 			{
@@ -439,7 +445,13 @@ public partial class FusionCache
 
 		try
 		{
-			var entry = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, (_, _) => Task.FromResult(defaultValue), false, default, options, activity, token).ConfigureAwait(false);
+			options ??= _defaultEntryOptions;
+			var (entry, hasNewValue) = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, (_, _) => Task.FromResult(defaultValue), false, default, options, activity, token).ConfigureAwait(false);
+			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+			{
+				await CascadeInvalidateAsync(operationId, key, token).ConfigureAwait(false);
+			}
 
 			if (entry is null)
 			{
@@ -709,6 +721,8 @@ public partial class FusionCache
 
 		try
 		{
+			options ??= _defaultEntryOptions;
+			RegisterDependencies(key, options.Dependencies);
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
@@ -724,6 +738,7 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			await CascadeInvalidateAsync(operationId, key, token).ConfigureAwait(false);
 		}
 		catch (Exception exc)
 		{
@@ -780,6 +795,7 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		await RemoveInternalAsync(key, options, token).ConfigureAwait(false);
+		await CascadeInvalidateAsync(MaybeGenerateOperationId(), key, token).ConfigureAwait(false);
 	}
 
 	// EXPIRE
@@ -829,6 +845,7 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		await ExpireInternalAsync(key, options, token).ConfigureAwait(false);
+		await CascadeInvalidateAsync(MaybeGenerateOperationId(), key, token).ConfigureAwait(false);
 	}
 
 	// TAGGING
