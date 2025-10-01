@@ -49,7 +49,7 @@ internal sealed class AdvancedCircuitBreaker
 		_halfOpenCalled = 0;
 	}
 
-	public CircuitBreakerState State => (CircuitBreakerState)_state;
+	public CircuitBreakerState State => (CircuitBreakerState)Volatile.Read(ref _state);
 
 	public int CurrentFailureCount => Volatile.Read(ref _failureCount);
 
