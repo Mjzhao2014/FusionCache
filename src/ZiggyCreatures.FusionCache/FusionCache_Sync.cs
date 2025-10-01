@@ -1095,29 +1095,40 @@ public partial class FusionCache
 		RunUtils.RunSyncActionAdvanced(
 			ct1 =>
 			{
+				var skipBackplane = false;
+
 				// DISTRIBUTED CACHE
 				var dca = DistributedCacheAccessor;
 				if (dca.ShouldWrite(options))
 				{
+					var dcaAttempted = false;
 					var dcaSuccess = false;
 					try
 					{
 						if (dca!.IsCurrentlyUsable(operationId, key))
 						{
+							dcaAttempted = true;
 							dcaSuccess = distributedCacheAction(dca, isBackground, ct1);
 						}
 					}
 					catch
 					{
-						//TryAddAutoRecoveryItem(operationId, key, action, timestamp, options, null);
 						throw;
 					}
 
-					if (dcaSuccess == false)
+					if (dcaAttempted == false)
+					{
+						skipBackplane = true;
+					}
+					else if (dcaSuccess == false)
 					{
 						AutoRecovery.TryAddItem(operationId, key, action, timestamp, options);
-						return;
 					}
+				}
+
+				if (skipBackplane)
+				{
+					return;
 				}
 
 				var mustAwaitBackplaneCompletion = isBackground || MustAwaitBackplaneOperations(options);
@@ -1130,11 +1141,13 @@ public partial class FusionCache
 						var bpa = BackplaneAccessor;
 						if (bpa.ShouldWrite(options))
 						{
+							var bpaAttempted = false;
 							var bpaSuccess = false;
 							try
 							{
 								if (bpa!.IsCurrentlyUsable(operationId, key))
 								{
+									bpaAttempted = true;
 									bpaSuccess = backplaneAction(bpa, isBackplaneBackground, ct2);
 								}
 							}
@@ -1143,7 +1156,7 @@ public partial class FusionCache
 								throw;
 							}
 
-							if (bpaSuccess == false)
+							if (bpaAttempted && bpaSuccess == false)
 							{
 								AutoRecovery.TryAddItem(operationId, key, action, timestamp, options);
 							}

@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using ZiggyCreatures.Caching.Fusion.Backplane;
 using ZiggyCreatures.Caching.Fusion.Internals.Diagnostics;
+using ZiggyCreatures.Caching.Fusion;
 
 namespace ZiggyCreatures.Caching.Fusion.Internals.Backplane;
 
@@ -87,12 +88,6 @@ internal partial class BackplaneAccessor
 
 		var cacheKey = message.CacheKey!;
 
-		// CHECK: CURRENTLY NOT USABLE
-		if (IsCurrentlyUsable(operationId, cacheKey) == false)
-		{
-			return false;
-		}
-
 		token.ThrowIfCancellationRequested();
 
 		// ACTIVITY
@@ -115,6 +110,14 @@ internal partial class BackplaneAccessor
 
 			// EVENT
 			_events.OnMessagePublished(operationId, message);
+			// success, inform circuit breaker
+			_breaker.RecordSuccess(out var stateChanged);
+			if (stateChanged)
+			{
+				_events.OnCircuitBreakerChange(operationId, cacheKey, _breaker.State);
+				if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+					_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] backplane circuit breaker changed state to {State}", _cache.CacheName, _cache.InstanceId, operationId, cacheKey, _breaker.State);
+			}
 
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] after " + actionDescription, _options.CacheName, _options.InstanceId, operationId, cacheKey);
@@ -220,9 +223,8 @@ internal partial class BackplaneAccessor
 		{
 			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
 				_logger.Log(LogLevel.Warning, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId}): [BP] backplane activated again", _cache.CacheName, _cache.InstanceId, operationId);
-
 			// EVENT
-			_events.OnCircuitBreakerChange(operationId, message.CacheKey, true);
+			_events.OnCircuitBreakerChange(operationId, message.CacheKey, _breaker.State);
 		}
 
 		// ACTIVITY
