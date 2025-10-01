@@ -952,7 +952,7 @@ public sealed class FusionCacheEntryOptions
 				logger.Log(options.IncoherentOptionsNormalizationLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): FailSafeMaxDuration {FailSafeMaxDuration} was lower than the Duration {Duration} on {Options}. Duration has been used instead.", options.CacheName, options.InstanceId, operationId, key, FailSafeMaxDuration.ToLogString(), Duration.ToLogString(), this.ToLogString());
 		}
 
-		if (size is null && priority.GetValueOrDefault(FusionCacheInternalUtils.CacheItemPriority_DefaultValue) == FusionCacheInternalUtils.CacheItemPriority_DefaultValue && events.HasEvictionSubscribers() == false)
+		if (size is null && priority.GetValueOrDefault(FusionCacheInternalUtils.CacheItemPriority_DefaultValue) == FusionCacheInternalUtils.CacheItemPriority_DefaultValue && events.HasEvictionSubscribers() == false && options.EvictionPolicy is null)
 		{
 			return (null, absoluteExpiration);
 		}
@@ -964,14 +964,21 @@ public sealed class FusionCacheEntryOptions
 			AbsoluteExpiration = absoluteExpiration
 		};
 
-		// EVENTS
-		if (events.HasEvictionSubscribers())
+		// EVENTS AND EVICTION POLICY
+		if (events.HasEvictionSubscribers() || options.EvictionPolicy is not null)
 		{
 			res.RegisterPostEvictionCallback(
 				(keyObj, entry, reason, state) =>
 				{
-					var hub = state as FusionCacheMemoryEventsHub;
+					var stateArray = state as object[];
+					var hub = stateArray?[0] as FusionCacheMemoryEventsHub;
+					var opts = stateArray?[1] as FusionCacheOptions;
 					var keyStr = keyObj.ToString() ?? "";
+
+					// Update eviction policy when IMemoryCache evicts the entry (skip manual removals already handled)
+					if (reason != EvictionReason.Removed)
+						opts?.EvictionPolicy?.OnRemove(keyStr);
+
 					// if this key was flagged for capacity-based eviction, override the reason and capture the policy name
 					string? policyName = null;
 					if (hub?.TryTakeMarkedEviction(keyStr, out policyName) == true)
@@ -980,7 +987,7 @@ public sealed class FusionCacheEntryOptions
 					}
 					hub?.OnEviction(string.Empty, keyStr, reason, policyName, ((IFusionCacheMemoryEntry?)entry)?.Value);
 				},
-				events
+				new object[] { events, options }
 			);
 		}
 
