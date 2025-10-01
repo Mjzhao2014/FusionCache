@@ -1,4 +1,5 @@
-﻿namespace ZiggyCreatures.Caching.Fusion.Events;
+﻿using ZiggyCreatures.Caching.Fusion;
+namespace ZiggyCreatures.Caching.Fusion.Events;
 
 /// <summary>
 /// The specific <see cref="EventArgs"/> object for events related to opening/closing of a circuit breaker.
@@ -6,16 +7,16 @@
 public class FusionCacheCircuitBreakerChangeEventArgs : EventArgs
 {
 	/// <summary>
-	/// Initializes a new instance of the <see cref="FusionCacheCircuitBreakerChangeEventArgs"/> class.
+	/// Initializes a new instance of the <see cref="FusionCacheCircuitBreakerChangeEventArgs"/> class with the current state.
 	/// </summary>
-	/// <param name="isClosed">A flag that indicates if the circuit breaker has been opened or closed.</param>
-	public FusionCacheCircuitBreakerChangeEventArgs(bool isClosed)
+	/// <param name="state">The new state of the circuit breaker.</param>
+	public FusionCacheCircuitBreakerChangeEventArgs(CircuitBreakerState state)
 	{
-		IsClosed = isClosed;
+		State = state;
 	}
 
 	/// <summary>
-	/// A flag that indicates if the circuit breaker has been opened or closed.
+	/// Gets the new state of the circuit breaker.
 	/// </summary>
-	public bool IsClosed { get; }
+	public CircuitBreakerState State { get; }
 }

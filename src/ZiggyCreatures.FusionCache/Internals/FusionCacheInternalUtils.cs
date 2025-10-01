@@ -468,13 +468,7 @@ internal static class FusionCacheInternalUtils
 
 	public static bool CanBeUsed(this DistributedCacheAccessor? dca, string? operationId, string? key)
 	{
-		if (dca is null)
-			return false;
-
-		if (dca.IsCurrentlyUsable(operationId, key) == false)
-			return false;
-
-		return true;
+		return dca is not null;
 	}
 
 	public static bool ShouldWrite(this BackplaneAccessor? bpa, FusionCacheEntryOptions options)
@@ -490,13 +484,7 @@ internal static class FusionCacheInternalUtils
 
 	public static bool CanBeUsed(this BackplaneAccessor? bpa, string? operationId, string? key)
 	{
-		if (bpa is null)
-			return false;
-
-		if (bpa.IsCurrentlyUsable(operationId, key) == false)
-			return false;
-
-		return true;
+		return bpa is not null;
 	}
 
 	public static Task<long> SharedTagExpirationDataFactoryAsync(FusionCacheFactoryExecutionContext<long> ctx, CancellationToken token)
