@@ -630,8 +630,8 @@ public class DependencyTests : AbstractTests
 		var memoryBackplane2 = new MemoryBackplane(backplaneOptions, null);
 
 		// Create two cache instances sharing the same backplane channel
-		var cache1Options = new FusionCacheOptions { CacheName = "test-cache-1", BackplaneChannelPrefix = "dependency-cascade" };
-		var cache2Options = new FusionCacheOptions { CacheName = "test-cache-2", BackplaneChannelPrefix = "dependency-cascade" };
+		var cache1Options = new FusionCacheOptions { CacheName = "test-cache-1", BackplaneChannelPrefix = "dependency-cascade", WaitForInitialBackplaneSubscribe = true };
+		var cache2Options = new FusionCacheOptions { CacheName = "test-cache-2", BackplaneChannelPrefix = "dependency-cascade", WaitForInitialBackplaneSubscribe = true };
 
 		using var cache1 = new FusionCache(cache1Options);
 		using var cache2 = new FusionCache(cache2Options);
@@ -673,8 +673,8 @@ public class DependencyTests : AbstractTests
 		var memoryBackplane2 = new MemoryBackplane(backplaneOptions, null);
 
 		// Create two cache instances sharing the same backplane channel
-		var cache1Options = new FusionCacheOptions { CacheName = "test-cache-1", BackplaneChannelPrefix = "dependency-cascade" };
-		var cache2Options = new FusionCacheOptions { CacheName = "test-cache-2", BackplaneChannelPrefix = "dependency-cascade" };
+		var cache1Options = new FusionCacheOptions { CacheName = "test-cache-1", BackplaneChannelPrefix = "dependency-cascade", WaitForInitialBackplaneSubscribe = true };
+		var cache2Options = new FusionCacheOptions { CacheName = "test-cache-2", BackplaneChannelPrefix = "dependency-cascade", WaitForInitialBackplaneSubscribe = true };
 
 		var cache1 = new FusionCache(cache1Options);
 		var cache2 = new FusionCache(cache2Options);
