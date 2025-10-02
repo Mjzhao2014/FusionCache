@@ -397,9 +397,10 @@ public partial class FusionCache
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
 			var (entry, hasNewValue) = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token).ConfigureAwait(false);
 			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+				ClearCascadeInvalidation(key);
 			if (hasNewValue && wasMaterializedBeforeSet)
 			{
-				Console.WriteLine($"[DEBUG] GetOrSetAsync cascade publish for {key}");
 				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
 			}
 
@@ -453,9 +454,10 @@ public partial class FusionCache
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
 			var (entry, hasNewValue) = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, (_, _) => Task.FromResult(defaultValue), false, default, options, activity, token).ConfigureAwait(false);
 			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+				ClearCascadeInvalidation(key);
 			if (hasNewValue && wasMaterializedBeforeSet)
 			{
-				Console.WriteLine($"[DEBUG] GetOrSetAsync default cascade publish for {key}");
 				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
 			}
 
@@ -513,6 +515,22 @@ public partial class FusionCache
 		}
 
 		var dca = DistributedCacheAccessor;
+
+		if (IsCascadeInvalidated(key))
+		{
+			if (options.AllowStaleOnReadOnly && memoryEntry is not null)
+			{
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry (cascade-invalidated)", CacheName, InstanceId, operationId, key);
+
+				_events.OnHit(operationId, key, true, activity);
+
+				return memoryEntry;
+			}
+
+			_events.OnMiss(operationId, key, activity);
+			return null;
+		}
 
 		// EARLY RETURN: NO USABLE DISTRIBUTED CACHE
 		if ((memoryEntry is not null && dca.ShouldReadWhenStale(options) == false) || dca.CanBeUsed(operationId, key) == false)
@@ -758,9 +776,9 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			ClearCascadeInvalidation(key);
 			if (wasMaterializedBeforeSet)
 			{
-				Console.WriteLine($"[DEBUG] SetAsync cascade publish for {key}");
 				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
 			}
 		}

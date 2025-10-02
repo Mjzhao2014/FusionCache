@@ -808,6 +808,8 @@ public class DependencyTests : AbstractTests
 			.SetDuration(TimeSpan.FromMinutes(10))
 			.WithDependencies(DependsOn.Keys("no-l2-parent")));
 
+		var distributedChildKey = TestsUtils.GetDistributedCacheKey(cache, "no-l2-child");
+
 		// Verify both exist in cache
 		Assert.Equal("parent-value", cache.GetOrDefault<string>("no-l2-parent"));
 		Assert.Equal("child-value", cache.GetOrDefault<string>("no-l2-child"));
@@ -816,7 +818,7 @@ public class DependencyTests : AbstractTests
 		cache.Set("no-l2-parent", "new-parent-value");
 
 		// Child should NOT be removed from L2, but should be removed from L1
-		Assert.NotNull(distributedCache.GetString("no-l2-child"));
+		Assert.NotNull(distributedCache.GetString(distributedChildKey));
 		Assert.Null(cache.GetOrDefault<string>("no-l2-child"));
 		// Parent should have new value
 		Assert.Equal("new-parent-value", cache.GetOrDefault<string>("no-l2-parent"));
@@ -829,7 +831,7 @@ public class DependencyTests : AbstractTests
 
 		cache.Remove("no-l2-parent");
 		Assert.Null(cache.GetOrDefault<string>("no-l2-child"));
-		Assert.NotNull(distributedCache.GetString("no-l2-child"));
+		Assert.NotNull(distributedCache.GetString(distributedChildKey));
 	}
 
 	[Fact]

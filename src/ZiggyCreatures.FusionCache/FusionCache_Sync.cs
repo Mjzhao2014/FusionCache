@@ -396,9 +396,10 @@ public partial class FusionCache
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
 			var (entry, hasNewValue) = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token);
 			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+				ClearCascadeInvalidation(key);
 			if (hasNewValue && wasMaterializedBeforeSet)
 			{
-				Console.WriteLine($"[DEBUG] GetOrSet cascade publish for {key}");
 				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
 			}
 
@@ -452,6 +453,8 @@ public partial class FusionCache
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
 			var (entry, hasNewValue) = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, (_, _) => defaultValue, false, default, options, activity, token);
 			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+				ClearCascadeInvalidation(key);
 			if (hasNewValue && wasMaterializedBeforeSet)
 			{
 				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
@@ -511,6 +514,22 @@ public partial class FusionCache
 		}
 
 		var dca = DistributedCacheAccessor;
+
+		if (IsCascadeInvalidated(key))
+		{
+			if (options.AllowStaleOnReadOnly && memoryEntry is not null)
+			{
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry (cascade-invalidated)", CacheName, InstanceId, operationId, key);
+
+				_events.OnHit(operationId, key, true, activity);
+
+				return memoryEntry;
+			}
+
+			_events.OnMiss(operationId, key, activity);
+			return null;
+		}
 
 		// EARLY RETURN: NO USABLE DISTRIBUTED CACHE
 		if ((memoryEntry is not null && dca.ShouldReadWhenStale(options) == false) || dca.CanBeUsed(operationId, key) == false)
@@ -758,10 +777,10 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			ClearCascadeInvalidation(key);
 			// After setting, cascade invalidation only if this key was already materialized
 			if (wasMaterializedBeforeSet)
 			{
-				Console.WriteLine($"[DEBUG] Set cascade publish for {key}");
 				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
 			}
 		}

@@ -71,6 +71,8 @@ public sealed partial class FusionCache
 	private readonly Dictionary<string, HashSet<string>> _reverseDependencies = new();
 	private readonly HashSet<string> _materializedKeys = new();
 	private readonly object _dependencyGraphLock = new();
+	private readonly HashSet<string> _cascadeInvalidatedKeys = new();
+	private readonly object _cascadeInvalidationLock = new();
 
 	internal readonly string TagInternalCacheKeyPrefix;
 
@@ -170,6 +172,7 @@ public sealed partial class FusionCache
 
 		// EVENTS
 		_events = new FusionCacheEventsHub(this, _options, _logger);
+		_events.Memory.Eviction += OnMemoryEntryEvicted;
 
 		// PLUGINS
 		_plugins = [];
@@ -287,6 +290,43 @@ public sealed partial class FusionCache
 	}
 
 	// DEPENDENCIES
+
+	private void OnMemoryEntryEvicted(object? sender, FusionCacheEntryEvictionEventArgs e)
+	{
+		if (string.IsNullOrEmpty(e.Key))
+			return;
+
+		// Only react to natural expiration/token-based invalidations or capacity pressure.
+		switch (e.Reason)
+		{
+			case EvictionReason.Expired:
+			case EvictionReason.TokenExpired:
+			case EvictionReason.Capacity:
+				break;
+			default:
+				return;
+		}
+
+		var key = e.Key;
+		var operationId = MaybeGenerateOperationId();
+
+		try
+		{
+			if (HasRegisteredChildren(key))
+			{
+				CascadeInvalidate(operationId, key, null, default, publishToBackplane: true);
+			}
+		}
+		catch (Exception exc)
+		{
+			if (_logger?.IsEnabled(LogLevel.Warning) ?? false)
+				_logger.Log(LogLevel.Warning, exc, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): cascading dependency invalidation after memory eviction failed", CacheName, InstanceId, operationId, key);
+		}
+		finally
+		{
+			RemoveIncomingDependenciesForKey(key);
+		}
+	}
 
 	private readonly struct DependencyRegistrationResult
 	{
@@ -524,19 +564,51 @@ public sealed partial class FusionCache
 		}
 	}
 
+	private void MarkCascadeInvalidated(string key)
+	{
+		if (_options.Cascade.CascadeToL2)
+			return;
+
+		lock (_cascadeInvalidationLock)
+		{
+			_cascadeInvalidatedKeys.Add(key);
+		}
+
+		if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+			_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] K={CacheKey}: marked as cascade-invalidated", CacheName, InstanceId, key);
+	}
+
+	private void ClearCascadeInvalidation(string key)
+	{
+		lock (_cascadeInvalidationLock)
+		{
+			_cascadeInvalidatedKeys.Remove(key);
+		}
+
+		if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+			_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] K={CacheKey}: cleared cascade-invalidated marker", CacheName, InstanceId, key);
+	}
+
+	private bool IsCascadeInvalidated(string key)
+	{
+		lock (_cascadeInvalidationLock)
+		{
+			return _cascadeInvalidatedKeys.Contains(key);
+		}
+	}
+
 	internal void CascadeInvalidateFromExternal(string operationId, string key)
 	{
-		Console.WriteLine($"[DEBUG] CascadeInvalidateFromExternal for {key} hasChildren={HasRegisteredChildren(key)}");
 		CascadeInvalidate(operationId, key, null, default, publishToBackplane: false);
-}
+	}
 
 	private FusionCacheEntryOptions CreateCascadeEntryOptions()
 	{
-	var opts = _cascadeRemoveByTagEntryOptions.Duplicate();
-	opts.SkipBackplaneNotifications = false;
-	opts.SkipDistributedCacheWrite = _options.Cascade.CascadeToL2 == false;
-	return opts;
-}
+		var opts = _cascadeRemoveByTagEntryOptions.Duplicate();
+		opts.SkipBackplaneNotifications = false;
+		opts.SkipDistributedCacheWrite = _options.Cascade.CascadeToL2 == false;
+		return opts;
+	}
 
 	private void CascadeInvalidate(string operationId, string parentKey, FusionCacheEntryOptions? originOptions, CancellationToken token, bool publishToBackplane)
 	{
@@ -607,6 +679,7 @@ public sealed partial class FusionCache
 				continue;
 
 			RemoveInternal(childKey, CreateCascadeEntryOptions(), token);
+			MarkCascadeInvalidated(childKey);
 			CascadeInvalidateInternal(operationId, childKey, visited, nextDepth, token);
 			RemoveIncomingDependenciesForKey(childKey);
 			RemoveOutgoingDependenciesForKey(childKey);
@@ -661,6 +734,7 @@ public sealed partial class FusionCache
 			if (!visited.Add(childKey))
 				continue;
 			await RemoveInternalAsync(childKey, CreateCascadeEntryOptions(), token).ConfigureAwait(false);
+			MarkCascadeInvalidated(childKey);
 			await CascadeInvalidateInternalAsync(operationId, childKey, visited, nextDepth, token).ConfigureAwait(false);
 			RemoveIncomingDependenciesForKey(childKey);
 			RemoveOutgoingDependenciesForKey(childKey);
@@ -1480,6 +1554,11 @@ public sealed partial class FusionCache
 
 				_autoRecovery?.Dispose();
 				_autoRecovery = null;
+
+				if (_events is not null)
+				{
+					_events.Memory.Eviction -= OnMemoryEntryEvicted;
+				}
 
 #pragma warning disable CS8625 // Cannot convert null literal to non-nullable reference type.
 				_memoryLocker.Dispose();

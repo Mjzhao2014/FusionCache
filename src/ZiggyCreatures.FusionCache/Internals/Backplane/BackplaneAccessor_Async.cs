@@ -182,7 +182,6 @@ internal partial class BackplaneAccessor
 		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] publishing dependency cascade", _options.CacheName, _options.InstanceId, operationId, key);
 
-		Console.WriteLine($"[DEBUG] Publishing dependency cascade (async) for {key}");
 
 		var message = BackplaneMessage.CreateForDependencyCascade(_cache.InstanceId, key, timestamp);
 
@@ -319,7 +318,6 @@ internal partial class BackplaneAccessor
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
 				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification has been received from remote cache {RemoteCacheInstanceId} (DEPENDENCY CASCADE)", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
 
-			Console.WriteLine($"[DEBUG] Received dependency cascade (async) for {message.CacheKey}");
 
 			_cache.CascadeInvalidateFromExternal(operationId, message.CacheKey!);
 			break;
