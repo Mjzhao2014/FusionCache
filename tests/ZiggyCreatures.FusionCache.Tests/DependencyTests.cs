@@ -1,3 +1,4 @@
+using System;
 using FusionCacheTests.Stuff;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
@@ -145,7 +146,7 @@ public class DependencyTests : AbstractTests
 		cache.Set("parent:config", "config-value");
 
 		// SCENARIO 1: Fresh insert - GetOrSet creates new entry with dependencies
-		var result1 = cache.GetOrSet("derived:config", 
+		var result1 = cache.GetOrSet("derived:config",
 			_ => "derived-config-value",
 			options => options
 				.SetDuration(TimeSpan.FromMinutes(5))
@@ -182,7 +183,7 @@ public class DependencyTests : AbstractTests
 		// SCENARIO 3: Test dependency update on existing entry
 		cache.Set("parent:config3a", "config3a-value");
 		cache.Set("parent:config3b", "config3b-value");
-		
+
 		// Create entry with initial dependency
 		var result3a = cache.GetOrSet("derived:config3",
 			_ => "derived-config3-value",
@@ -220,7 +221,8 @@ public class DependencyTests : AbstractTests
 
 		// SCENARIO 1: Fresh insert - GetOrSetAsync creates new entry with dependencies
 		var result1 = await cache.GetOrSetAsync("derived:settings",
-			async _ => {
+			async _ =>
+			{
 				await Task.Delay(10); // Simulate async work
 				return "derived-settings-value";
 			},
@@ -244,7 +246,8 @@ public class DependencyTests : AbstractTests
 
 		// Now call GetOrSetAsync on the existing entry with dependencies
 		var result2 = await cache.GetOrSetAsync("derived:settings2",
-			async _ => {
+			async _ =>
+			{
 				await Task.Delay(10);
 				return "should-not-be-called"; // Factory should not be called since entry exists
 			},
@@ -262,10 +265,11 @@ public class DependencyTests : AbstractTests
 		// SCENARIO 3: Test dependency update on existing entry
 		await cache.SetAsync("parent:settings3a", "settings3a-value");
 		await cache.SetAsync("parent:settings3b", "settings3b-value");
-		
+
 		// Create entry with initial dependency
 		var result3a = await cache.GetOrSetAsync("derived:settings3",
-			async _ => {
+			async _ =>
+			{
 				await Task.Delay(10);
 				return "derived-settings3-value";
 			},
@@ -277,7 +281,8 @@ public class DependencyTests : AbstractTests
 
 		// Update dependencies on existing entry (should replace old dependencies)
 		var result3b = await cache.GetOrSetAsync("derived:settings3",
-			async _ => {
+			async _ =>
+			{
 				await Task.Delay(10);
 				return "should-not-be-called";
 			},
@@ -619,14 +624,17 @@ public class DependencyTests : AbstractTests
 	[Fact]
 	public void BackplanePropagation_PropagatesCascadeInvalidation()
 	{
-		var memoryBackplane = new MemoryBackplane(Options.Create(new MemoryBackplaneOptions()), null);
+		var connectionId = Guid.NewGuid().ToString("N");
+		var backplaneOptions = Options.Create(new MemoryBackplaneOptions { ConnectionId = connectionId });
+		var memoryBackplane1 = new MemoryBackplane(backplaneOptions, null);
+		var memoryBackplane2 = new MemoryBackplane(backplaneOptions, null);
 
-		// Create two cache instances sharing the same backplane
-		var cache1 = new FusionCache(new FusionCacheOptions { CacheName = "test-cache-1" });
-		cache1.SetupBackplane(memoryBackplane);
+		// Create two cache instances sharing the same backplane channel
+		var cache1Options = new FusionCacheOptions { CacheName = "test-cache-1", BackplaneChannelPrefix = "dependency-cascade" };
+		var cache2Options = new FusionCacheOptions { CacheName = "test-cache-2", BackplaneChannelPrefix = "dependency-cascade" };
 
-		var cache2 = new FusionCache(new FusionCacheOptions { CacheName = "test-cache-2" });
-		cache2.SetupBackplane(memoryBackplane);
+		using var cache1 = new FusionCache(cache1Options);
+		using var cache2 = new FusionCache(cache2Options);
 
 		// Set parent in cache1
 		cache1.Set("shared-parent", "parent-value");
@@ -635,10 +643,15 @@ public class DependencyTests : AbstractTests
 		cache2.Set("shared-child", "child-value", options => options
 			.SetDuration(TimeSpan.FromMinutes(10))
 			.WithDependencies(DependsOn.Keys("shared-parent")));
-
 		// Verify both caches have their entries
-		Assert.Equal("parent-value", cache1.GetOrDefault<string>("shared-parent"));
-		Assert.Equal("child-value", cache2.GetOrDefault<string>("shared-child"));
+		var parentValue = cache1.GetOrDefault<string>("shared-parent");
+		var childValue = cache2.GetOrDefault<string>("shared-child");
+		Assert.Equal("parent-value", parentValue);
+		Assert.Equal("child-value", childValue);
+
+		// Wire up backplane after initial population
+		cache1.SetupBackplane(memoryBackplane1);
+		cache2.SetupBackplane(memoryBackplane2);
 
 		// Update parent in cache1 - should propagate invalidation to cache2
 		cache1.Set("shared-parent", "new-parent-value");
@@ -654,14 +667,18 @@ public class DependencyTests : AbstractTests
 	[Fact]
 	public async Task BackplanePropagationAsync_PropagatesCascadeInvalidation()
 	{
-		var memoryBackplane = new MemoryBackplane(Options.Create(new MemoryBackplaneOptions()), null);
+		var connectionId = Guid.NewGuid().ToString("N");
+		var backplaneOptions = Options.Create(new MemoryBackplaneOptions { ConnectionId = connectionId });
+		var memoryBackplane1 = new MemoryBackplane(backplaneOptions, null);
+		var memoryBackplane2 = new MemoryBackplane(backplaneOptions, null);
 
-		// Create two cache instances sharing the same backplane
-		var cache1 = new FusionCache(new FusionCacheOptions { CacheName = "test-cache-1" });
-		cache1.SetupBackplane(memoryBackplane);
+		// Create two cache instances sharing the same backplane channel
+		var cache1Options = new FusionCacheOptions { CacheName = "test-cache-1", BackplaneChannelPrefix = "dependency-cascade" };
+		var cache2Options = new FusionCacheOptions { CacheName = "test-cache-2", BackplaneChannelPrefix = "dependency-cascade" };
 
-		var cache2 = new FusionCache(new FusionCacheOptions { CacheName = "test-cache-2" });
-		cache2.SetupBackplane(memoryBackplane);
+		var cache1 = new FusionCache(cache1Options);
+		var cache2 = new FusionCache(cache2Options);
+
 
 		// Set parent in cache1
 		await cache1.SetAsync("async-shared-parent", "parent-value");
@@ -672,8 +689,14 @@ public class DependencyTests : AbstractTests
 			.WithDependencies(DependsOn.Keys("async-shared-parent")));
 
 		// Verify both caches have their entries
-		Assert.Equal("parent-value", await cache1.GetOrDefaultAsync<string>("async-shared-parent"));
-		Assert.Equal("child-value", await cache2.GetOrDefaultAsync<string>("async-shared-child"));
+		var asyncParentValue = await cache1.GetOrDefaultAsync<string>("async-shared-parent");
+		var asyncChildValue = await cache2.GetOrDefaultAsync<string>("async-shared-child");
+		Assert.Equal("parent-value", asyncParentValue);
+		Assert.Equal("child-value", asyncChildValue);
+
+		// Wire up backplane after initial population
+		cache1.SetupBackplane(memoryBackplane1);
+		cache2.SetupBackplane(memoryBackplane2);
 
 		// Update parent in cache1 - should propagate invalidation to cache2
 		await cache1.SetAsync("async-shared-parent", "new-parent-value");
