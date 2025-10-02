@@ -1267,7 +1267,17 @@ public sealed partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}]: setup backplane (BACKPLANE={BackplaneType})", CacheName, InstanceId, backplane.GetType().FullName);
 
-			_bpa.Subscribe();
+			if (_options.WaitForInitialBackplaneSubscribe)
+			{
+				_bpa.Subscribe();
+			}
+			else
+			{
+				_ = Task.Run(async () =>
+				{
+					await _bpa.SubscribeAsync().ConfigureAwait(false);
+				});
+			}
 		}
 
 		// CHECK: WARN THE USER IN CASE OF

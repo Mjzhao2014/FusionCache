@@ -395,11 +395,12 @@ public partial class FusionCache
 		{
 			options ??= _defaultEntryOptions;
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
 			var (entry, hasNewValue) = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token).ConfigureAwait(false);
 			RegisterDependencies(key, options.Dependencies);
 			if (hasNewValue)
 				ClearCascadeInvalidation(key);
-			if (hasNewValue && wasMaterializedBeforeSet)
+			if (hasNewValue && (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet))
 			{
 				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
 			}
@@ -452,11 +453,12 @@ public partial class FusionCache
 		{
 			options ??= _defaultEntryOptions;
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
 			var (entry, hasNewValue) = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, (_, _) => Task.FromResult(defaultValue), false, default, options, activity, token).ConfigureAwait(false);
 			RegisterDependencies(key, options.Dependencies);
 			if (hasNewValue)
 				ClearCascadeInvalidation(key);
-			if (hasNewValue && wasMaterializedBeforeSet)
+			if (hasNewValue && (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet))
 			{
 				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
 			}
@@ -756,6 +758,7 @@ public partial class FusionCache
 		using var activity = Activities.Source.StartActivityWithCommonTags(Activities.Names.Set, CacheName, InstanceId, key, operationId);
 
 		var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+		var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
 
 		try
 		{
@@ -777,7 +780,7 @@ public partial class FusionCache
 			// EVENT
 			_events.OnSet(operationId, key);
 			ClearCascadeInvalidation(key);
-			if (wasMaterializedBeforeSet)
+			if (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet)
 			{
 				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
 			}

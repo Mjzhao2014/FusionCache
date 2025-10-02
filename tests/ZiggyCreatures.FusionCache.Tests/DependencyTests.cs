@@ -990,13 +990,16 @@ public class DependencyTests : AbstractTests
 
 		Assert.Equal("orphan-value", cache.GetOrDefault<string>("orphan-from-start"));
 
-		// Later add the parent
+		// Later add the parent: this should immediately invalidate dependent children
 		cache.Set("non-existent-parent", "parent-value");
+		Assert.Null(cache.GetOrDefault<string>("orphan-from-start"));
 
-		// Child should still exist (adding parent doesn't invalidate existing children)
-		Assert.Equal("orphan-value", cache.GetOrDefault<string>("orphan-from-start"));
+		// Re-add the child after the parent exists
+		cache.Set("orphan-from-start", "new-orphan-value", options => options
+			.WithDependencies(DependsOn.Keys("non-existent-parent")));
+		Assert.Equal("new-orphan-value", cache.GetOrDefault<string>("orphan-from-start"));
 
-		// Update parent - should now invalidate child since dependency relationship exists
+		// Updating the parent should again invalidate the child
 		cache.Set("non-existent-parent", "new-parent-value");
 		Assert.Null(cache.GetOrDefault<string>("orphan-from-start"));
 	}

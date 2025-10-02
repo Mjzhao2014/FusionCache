@@ -394,11 +394,12 @@ public partial class FusionCache
 			// ensure options has a value to attach dependencies to
 			options ??= _defaultEntryOptions;
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
 			var (entry, hasNewValue) = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token);
 			RegisterDependencies(key, options.Dependencies);
 			if (hasNewValue)
 				ClearCascadeInvalidation(key);
-			if (hasNewValue && wasMaterializedBeforeSet)
+			if (hasNewValue && (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet))
 			{
 				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
 			}
@@ -451,11 +452,12 @@ public partial class FusionCache
 		{
 			options ??= _defaultEntryOptions;
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
 			var (entry, hasNewValue) = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, (_, _) => defaultValue, false, default, options, activity, token);
 			RegisterDependencies(key, options.Dependencies);
 			if (hasNewValue)
 				ClearCascadeInvalidation(key);
-			if (hasNewValue && wasMaterializedBeforeSet)
+			if (hasNewValue && (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet))
 			{
 				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
 			}
@@ -759,6 +761,7 @@ public partial class FusionCache
 			// ensure we have entry options
 			options ??= _defaultEntryOptions;
 			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
 			// Register any dependency edges declared for this entry and capture existing children state
 			RegisterDependencies(key, options.Dependencies);
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
@@ -778,8 +781,8 @@ public partial class FusionCache
 			// EVENT
 			_events.OnSet(operationId, key);
 			ClearCascadeInvalidation(key);
-			// After setting, cascade invalidation only if this key was already materialized
-			if (wasMaterializedBeforeSet)
+			// After setting, cascade invalidation when this key was already materialized or has existing children waiting on it
+			if (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet)
 			{
 				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
 			}
