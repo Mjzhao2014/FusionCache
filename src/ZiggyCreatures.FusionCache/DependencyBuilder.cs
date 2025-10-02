@@ -10,6 +10,8 @@ public sealed class DependencyBuilder
 {
 	private readonly HashSet<string> _parentKeys = new();
 	private readonly HashSet<string> _childKeys = new();
+	private bool _hasParentDeclarations;
+	private bool _hasChildDeclarations;
 
 	/// <summary>
 	/// Declare that the current entry depends on the given parent keys.
@@ -20,6 +22,7 @@ public sealed class DependencyBuilder
 	{
 		if (keys is null)
 			return this;
+		_hasParentDeclarations = true;
 		foreach (var key in keys)
 		{
 			if (string.IsNullOrEmpty(key))
@@ -37,6 +40,7 @@ public sealed class DependencyBuilder
 	/// <returns>The builder for fluent chaining.</returns>
 	public DependencyBuilder ParentOf(string childKey)
 	{
+		_hasChildDeclarations = true;
 		if (!string.IsNullOrEmpty(childKey))
 		{
 			_childKeys.Add(childKey);
@@ -46,6 +50,8 @@ public sealed class DependencyBuilder
 
 	internal IReadOnlyCollection<string> ParentKeys => _parentKeys;
 	internal IReadOnlyCollection<string> ChildKeys => _childKeys;
+	internal bool HasParentDeclarations => _hasParentDeclarations;
+	internal bool HasChildDeclarations => _hasChildDeclarations;
 }
 
 /// <summary>

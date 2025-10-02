@@ -1,6 +1,9 @@
-﻿using System.Diagnostics;
+﻿using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -65,6 +68,8 @@ public sealed partial class FusionCache
 
 	// DEPENDENCY GRAPH
 	private readonly Dictionary<string, HashSet<string>> _dependencies = new();
+	private readonly Dictionary<string, HashSet<string>> _reverseDependencies = new();
+	private readonly HashSet<string> _materializedKeys = new();
 	private readonly object _dependencyGraphLock = new();
 
 	internal readonly string TagInternalCacheKeyPrefix;
@@ -283,26 +288,39 @@ public sealed partial class FusionCache
 
 	// DEPENDENCIES
 
-	private void RegisterDependencies(string currentKey, DependencyBuilder? deps)
+	private readonly struct DependencyRegistrationResult
 	{
-		if (deps is null)
-			return;
-		// Attach parent edges: currentKey depends on these parents
-		if (deps.ParentKeys.Count > 0)
+		public DependencyRegistrationResult(bool hasExistingChildrenBefore)
 		{
-			foreach (var parentKey in deps.ParentKeys)
+			HasExistingChildrenBefore = hasExistingChildrenBefore;
+		}
+
+		public bool HasExistingChildrenBefore { get; }
+	}
+
+	private DependencyRegistrationResult RegisterDependencies(string currentKey, DependencyBuilder? deps)
+	{
+		bool hadExistingChildrenBefore;
+
+		lock (_dependencyGraphLock)
+		{
+			hadExistingChildrenBefore = _dependencies.TryGetValue(currentKey, out var existingChildren) && existingChildren.Count > 0;
+
+			if (deps is not null)
 			{
-				AddDependencyEdge(parentKey, currentKey);
+				if (deps.HasParentDeclarations)
+				{
+					ReplaceParentDependenciesLocked(currentKey, deps.ParentKeys);
+				}
+
+				if (deps.HasChildDeclarations)
+				{
+					ReplaceChildDependenciesLocked(currentKey, deps.ChildKeys);
+				}
 			}
 		}
-		// Attach child edges: currentKey is parent of these children
-		if (deps.ChildKeys.Count > 0)
-		{
-			foreach (var childKey in deps.ChildKeys)
-			{
-				AddDependencyEdge(currentKey, childKey);
-			}
-		}
+
+		return new DependencyRegistrationResult(hadExistingChildrenBefore);
 	}
 
 	private void AddDependencyEdge(string parentKey, string childKey)
@@ -311,20 +329,103 @@ public sealed partial class FusionCache
 			return;
 		lock (_dependencyGraphLock)
 		{
-			if (WouldIntroduceCycle(parentKey, childKey))
-			{
-				throw new FusionCacheDependencyCycleException($"Adding dependency edge {parentKey} -> {childKey} would create a cycle");
-			}
-			if (!_dependencies.TryGetValue(parentKey, out var children))
-			{
-				children = new HashSet<string>();
-				_dependencies[parentKey] = children;
-			}
-			children.Add(childKey);
+			AddDependencyEdgeLocked(parentKey, childKey);
 		}
 	}
 
-	private bool WouldIntroduceCycle(string parentKey, string childKey)
+	private void AddDependencyEdgeLocked(string parentKey, string childKey)
+	{
+		if (string.IsNullOrEmpty(parentKey) || string.IsNullOrEmpty(childKey))
+			return;
+		if (parentKey == childKey)
+			throw new FusionCacheDependencyCycleException($"Adding dependency edge {parentKey} -> {childKey} would create a cycle");
+
+		if (WouldIntroduceCycleLocked(parentKey, childKey))
+		{
+			throw new FusionCacheDependencyCycleException($"Adding dependency edge {parentKey} -> {childKey} would create a cycle");
+		}
+
+		if (_dependencies.TryGetValue(parentKey, out var children) == false)
+		{
+			children = new HashSet<string>();
+			_dependencies[parentKey] = children;
+		}
+
+		var added = children.Add(childKey);
+		if (added)
+		{
+			if (_reverseDependencies.TryGetValue(childKey, out var parents) == false)
+			{
+				parents = new HashSet<string>();
+				_reverseDependencies[childKey] = parents;
+			}
+
+			parents.Add(parentKey);
+		}
+	}
+
+	private void ReplaceParentDependenciesLocked(string childKey, IReadOnlyCollection<string> newParents)
+	{
+		if (_reverseDependencies.TryGetValue(childKey, out var parents) && parents.Count > 0)
+		{
+			var snapshot = new string[parents.Count];
+			parents.CopyTo(snapshot);
+			foreach (var existingParent in snapshot)
+			{
+				RemoveDependencyEdgeLocked(existingParent, childKey);
+			}
+		}
+
+		if (newParents.Count > 0)
+		{
+			foreach (var parentKey in newParents)
+			{
+				AddDependencyEdgeLocked(parentKey, childKey);
+			}
+		}
+	}
+
+	private void ReplaceChildDependenciesLocked(string parentKey, IReadOnlyCollection<string> newChildren)
+	{
+		if (_dependencies.TryGetValue(parentKey, out var children) && children.Count > 0)
+		{
+			var snapshot = new string[children.Count];
+			children.CopyTo(snapshot);
+			foreach (var existingChild in snapshot)
+			{
+				RemoveDependencyEdgeLocked(parentKey, existingChild);
+			}
+		}
+
+		if (newChildren.Count > 0)
+		{
+			foreach (var childKey in newChildren)
+			{
+				AddDependencyEdgeLocked(parentKey, childKey);
+			}
+		}
+	}
+
+	private void RemoveDependencyEdgeLocked(string parentKey, string childKey)
+	{
+		if (_dependencies.TryGetValue(parentKey, out var children) && children.Remove(childKey))
+		{
+			if (children.Count == 0)
+			{
+				_dependencies.Remove(parentKey);
+			}
+		}
+
+		if (_reverseDependencies.TryGetValue(childKey, out var parents) && parents.Remove(parentKey))
+		{
+			if (parents.Count == 0)
+			{
+				_reverseDependencies.Remove(childKey);
+			}
+		}
+	}
+
+	private bool WouldIntroduceCycleLocked(string parentKey, string childKey)
 	{
 		// simple DFS to see if parent is reachable from child
 		if (parentKey == childKey)
@@ -350,43 +451,188 @@ public sealed partial class FusionCache
 		return false;
 	}
 
-	private FusionCacheEntryOptions CreateCascadeEntryOptions()
+	private void RemoveIncomingDependenciesForKey(string key)
 	{
-		var opts = _cascadeRemoveByTagEntryOptions.Duplicate();
-		opts.SkipBackplaneNotifications = true;
-		opts.SkipDistributedCacheWrite = _options.Cascade.CascadeToL2 == false;
-		return opts;
+		lock (_dependencyGraphLock)
+		{
+			if (_reverseDependencies.TryGetValue(key, out var parents) == false || parents.Count == 0)
+				return;
+
+			var snapshot = new string[parents.Count];
+			parents.CopyTo(snapshot);
+
+			foreach (var parent in snapshot)
+			{
+				RemoveDependencyEdgeLocked(parent, key);
+			}
+		}
 	}
 
-	private void CascadeInvalidate(string operationId, string parentKey, CancellationToken token)
+	private void RemoveOutgoingDependenciesForKey(string key)
 	{
+		lock (_dependencyGraphLock)
+		{
+			if (_dependencies.TryGetValue(key, out var children) == false || children.Count == 0)
+				return;
+
+			var snapshot = new string[children.Count];
+			children.CopyTo(snapshot);
+
+			foreach (var child in snapshot)
+			{
+				RemoveDependencyEdgeLocked(key, child);
+			}
+		}
+	}
+
+	private bool HasRegisteredChildren(string key)
+	{
+		lock (_dependencyGraphLock)
+		{
+			return _dependencies.TryGetValue(key, out var children) && children.Count > 0;
+		}
+	}
+
+	private string[] GetParentDependenciesSnapshot(string key)
+	{
+		lock (_dependencyGraphLock)
+		{
+			if (_reverseDependencies.TryGetValue(key, out var parents) && parents.Count > 0)
+			{
+				var snapshot = new string[parents.Count];
+				parents.CopyTo(snapshot);
+				return snapshot;
+			}
+		}
+
+		return Array.Empty<string>();
+	}
+
+	private void MarkKeyAsMaterialized(string key)
+	{
+		lock (_dependencyGraphLock)
+		{
+			_materializedKeys.Add(key);
+		}
+	}
+
+	private bool HasKeyEverBeenMaterialized(string key)
+	{
+		lock (_dependencyGraphLock)
+		{
+			return _materializedKeys.Contains(key);
+		}
+	}
+
+	internal void CascadeInvalidateFromExternal(string operationId, string key)
+	{
+		Console.WriteLine($"[DEBUG] CascadeInvalidateFromExternal for {key} hasChildren={HasRegisteredChildren(key)}");
+		CascadeInvalidate(operationId, key, null, default, publishToBackplane: false);
+}
+
+	private FusionCacheEntryOptions CreateCascadeEntryOptions()
+	{
+	var opts = _cascadeRemoveByTagEntryOptions.Duplicate();
+	opts.SkipBackplaneNotifications = false;
+	opts.SkipDistributedCacheWrite = _options.Cascade.CascadeToL2 == false;
+	return opts;
+}
+
+	private void CascadeInvalidate(string operationId, string parentKey, FusionCacheEntryOptions? originOptions, CancellationToken token, bool publishToBackplane)
+	{
+		if (publishToBackplane)
+		{
+			var effectiveOptions = originOptions ?? _defaultEntryOptions;
+			if (effectiveOptions.SkipBackplaneNotifications == false)
+			{
+				var cascadeOptions = CreateCascadeEntryOptions();
+				var bpa = BackplaneAccessor;
+				if (bpa is not null && bpa.ShouldWrite(cascadeOptions))
+				{
+					var timestamp = FusionCacheInternalUtils.GetCurrentTimestamp();
+					var isBackground = cascadeOptions.AllowBackgroundBackplaneOperations;
+					_ = bpa.PublishDependencyCascade(operationId, parentKey, timestamp, cascadeOptions, false, isBackground, token);
+				}
+			}
+		}
+
 		var visited = new HashSet<string>();
 		CascadeInvalidateInternal(operationId, parentKey, visited, 0, token);
+	}
+
+	private List<string> ResolveChildren(string parentKey)
+	{
+		lock (_dependencyGraphLock)
+		{
+			if (_dependencies.TryGetValue(parentKey, out var directChildren) && directChildren.Count > 0)
+			{
+				return new List<string>(directChildren);
+			}
+
+			var fallback = new List<string>();
+			foreach (var kvp in _reverseDependencies)
+			{
+				if (kvp.Value.Contains(parentKey))
+				{
+					fallback.Add(kvp.Key);
+				}
+			}
+
+			return fallback;
+		}
 	}
 
 	private void CascadeInvalidateInternal(string operationId, string parentKey, HashSet<string> visited, int depth, CancellationToken token)
 	{
 		if (depth >= _options.Cascade.MaxCascadeDepth)
 			return;
-		List<string> children;
-		lock (_dependencyGraphLock)
-		{
-			if (!_dependencies.TryGetValue(parentKey, out var childSet))
-				return;
-			children = new List<string>(childSet);
-		}
+
+		var children = ResolveChildren(parentKey);
+		if (children.Count == 0)
+			return;
+
+		var nextDepth = depth + 1;
 		foreach (var childKey in children)
 		{
+			if (nextDepth > _options.Cascade.MaxCascadeDepth)
+			{
+				lock (_dependencyGraphLock)
+				{
+					RemoveDependencyEdgeLocked(parentKey, childKey);
+				}
+				continue;
+			}
+
 			if (!visited.Add(childKey))
 				continue;
-			// remove child locally and from distributed cache if configured
+
 			RemoveInternal(childKey, CreateCascadeEntryOptions(), token);
-			CascadeInvalidateInternal(operationId, childKey, visited, depth + 1, token);
+			CascadeInvalidateInternal(operationId, childKey, visited, nextDepth, token);
+			RemoveIncomingDependenciesForKey(childKey);
+			RemoveOutgoingDependenciesForKey(childKey);
 		}
+
+		RemoveOutgoingDependenciesForKey(parentKey);
 	}
 
-	private async ValueTask CascadeInvalidateAsync(string operationId, string parentKey, CancellationToken token)
+	private async ValueTask CascadeInvalidateAsync(string operationId, string parentKey, FusionCacheEntryOptions? originOptions, CancellationToken token, bool publishToBackplane)
 	{
+		if (publishToBackplane)
+		{
+			var effectiveOptions = originOptions ?? _defaultEntryOptions;
+			if (effectiveOptions.SkipBackplaneNotifications == false)
+			{
+				var cascadeOptions = CreateCascadeEntryOptions();
+				var bpa = BackplaneAccessor;
+				if (bpa is not null && bpa.ShouldWrite(cascadeOptions))
+				{
+					var timestamp = FusionCacheInternalUtils.GetCurrentTimestamp();
+					var isBackground = cascadeOptions.AllowBackgroundBackplaneOperations;
+					await bpa.PublishDependencyCascadeAsync(operationId, parentKey, timestamp, cascadeOptions, false, isBackground, token).ConfigureAwait(false);
+				}
+			}
+		}
+
 		var visited = new HashSet<string>();
 		await CascadeInvalidateInternalAsync(operationId, parentKey, visited, 0, token).ConfigureAwait(false);
 	}
@@ -395,20 +641,32 @@ public sealed partial class FusionCache
 	{
 		if (depth >= _options.Cascade.MaxCascadeDepth)
 			return;
-		List<string> children;
-		lock (_dependencyGraphLock)
-		{
-			if (!_dependencies.TryGetValue(parentKey, out var childSet))
-				return;
-			children = new List<string>(childSet);
-		}
+
+		var children = ResolveChildren(parentKey);
+		if (children.Count == 0)
+			return;
+
+		var nextDepth = depth + 1;
 		foreach (var childKey in children)
 		{
+			if (nextDepth > _options.Cascade.MaxCascadeDepth)
+			{
+				lock (_dependencyGraphLock)
+				{
+					RemoveDependencyEdgeLocked(parentKey, childKey);
+				}
+				continue;
+			}
+
 			if (!visited.Add(childKey))
 				continue;
 			await RemoveInternalAsync(childKey, CreateCascadeEntryOptions(), token).ConfigureAwait(false);
-			await CascadeInvalidateInternalAsync(operationId, childKey, visited, depth + 1, token).ConfigureAwait(false);
+			await CascadeInvalidateInternalAsync(operationId, childKey, visited, nextDepth, token).ConfigureAwait(false);
+			RemoveIncomingDependenciesForKey(childKey);
+			RemoveOutgoingDependenciesForKey(childKey);
 		}
+
+		RemoveOutgoingDependenciesForKey(parentKey);
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -623,6 +881,7 @@ public sealed partial class FusionCache
 					if (_mca.ShouldWrite(options))
 					{
 						_mca.SetEntry<TValue>(operationId, key, lateEntry, options);
+						MarkKeyAsMaterialized(key);
 					}
 
 					if (RequiresDistributedOperations(options))
@@ -753,6 +1012,8 @@ public sealed partial class FusionCache
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling RemoveMemoryEntryInternal", CacheName, InstanceId, operationId, key);
 
 		_mca.RemoveEntry(operationId, key);
+		CascadeInvalidate(operationId, key, null, default, publishToBackplane: false);
+		RemoveIncomingDependenciesForKey(key);
 	}
 
 	internal void ExpireMemoryEntryInternal(string operationId, string key, long? timestampThreshold)
@@ -760,7 +1021,12 @@ public sealed partial class FusionCache
 		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling ExpireMemoryEntryInternal (timestampThreshold={TimestampThreshold})", CacheName, InstanceId, operationId, key, timestampThreshold);
 
-		_mca.ExpireEntry(operationId, key, timestampThreshold);
+		var expired = _mca.ExpireEntry(operationId, key, timestampThreshold);
+		if (expired)
+		{
+			CascadeInvalidate(operationId, key, null, default, publishToBackplane: false);
+			RemoveIncomingDependenciesForKey(key);
+		}
 	}
 
 	// TAGGING
@@ -927,17 +1193,7 @@ public sealed partial class FusionCache
 			if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}]: setup backplane (BACKPLANE={BackplaneType})", CacheName, InstanceId, backplane.GetType().FullName);
 
-			if (_options.WaitForInitialBackplaneSubscribe)
-			{
-				_bpa.Subscribe();
-			}
-			else
-			{
-				_ = Task.Run(async () =>
-				{
-					await _bpa.SubscribeAsync().ConfigureAwait(false);
-				});
-			}
+			_bpa.Subscribe();
 		}
 
 		// CHECK: WARN THE USER IN CASE OF

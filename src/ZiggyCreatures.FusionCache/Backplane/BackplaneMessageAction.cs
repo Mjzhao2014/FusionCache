@@ -21,4 +21,9 @@ public enum BackplaneMessageAction : byte
 	/// A cache entry has been manually expired (via an Expire() method call).
 	/// </summary>
 	EntryExpire = 3
+	,
+	/// <summary>
+	/// A cascade invalidation needs to be propagated for a dependency parent key.
+	/// </summary>
+	DependencyCascade = 4
 }
