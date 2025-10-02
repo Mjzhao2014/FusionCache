@@ -81,6 +81,30 @@ internal sealed class MemoryCacheAccessor
 				throw new InvalidOperationException("No MemoryCacheEntryOptions or AbsoluteExpiration was determined: this should not be possible, WTH!?");
 			}
 
+			// Update eviction policy state and check for capacity-based evictions
+			if (_options.EvictionPolicy is not null)
+			{
+				_options.EvictionPolicy.OnSet(key, entry.Metadata);
+				var keysToEvict = _options.EvictionPolicy.GetKeysToEvict();
+				var hasEvictionSubscribers = _events.HasEvictionSubscribers();
+				foreach (var k in keysToEvict)
+				{
+					if (hasEvictionSubscribers)
+					{
+						if (_cache.TryGetValue<IFusionCacheMemoryEntry>(k, out var entryToEvict))
+						{
+							// capture timestamp so we can validate the eviction marker during the callback
+							_events.MarkEviction(k, _options.EvictionPolicy.Name, entryToEvict.Timestamp);
+						}
+						else
+						{
+							// ensure we don't leave stale markers if the entry already disappeared
+							_events.ClearMarkedEviction(k);
+						}
+					}
+					RemoveEntry(operationId, k);
+				}
+			}
 			// EVENT
 			_events.OnSet(operationId, key);
 		}
@@ -104,15 +128,17 @@ internal sealed class MemoryCacheAccessor
 		{
 			var entry = _cache.Get<IFusionCacheMemoryEntry?>(key);
 
-			// EVENT
-			if (entry is not null)
-			{
-				_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
-			}
-			else
-			{
-				_events.OnMiss(operationId, key, activity);
-			}
+				// EVENT
+				if (entry is not null)
+				{
+					_events.OnHit(operationId, key, entry.IsLogicallyExpired(), activity);
+					// update eviction policy recency/frequency
+					_options.EvictionPolicy?.OnGet(key);
+				}
+				else
+				{
+					_events.OnMiss(operationId, key, activity);
+				}
 
 			return entry;
 		}
@@ -165,6 +191,8 @@ internal sealed class MemoryCacheAccessor
 			if (entry is not null)
 			{
 				_events.OnHit(operationId, key, isValid == false, activity);
+				// update eviction policy
+				_options.EvictionPolicy?.OnGet(key);
 			}
 			else
 			{
@@ -192,6 +220,8 @@ internal sealed class MemoryCacheAccessor
 				_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [MC] removing memory entry", _options.CacheName, _options.InstanceId, operationId, key);
 
 			_cache.Remove(key);
+			// update eviction policy state if configured
+			_options.EvictionPolicy?.OnRemove(key);
 
 			// EVENT
 			_events.OnRemove(operationId, key);
