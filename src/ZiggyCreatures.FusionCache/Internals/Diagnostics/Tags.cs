@@ -21,9 +21,8 @@ internal static class Tags
 
 		public const string MemoryEvictReason = "fusioncache.memory.evict_reason";
 
-		public const string DistributedCircuitBreakerClosed = "fusioncache.distributed.circuit_breaker.closed";
-
-		public const string BackplaneCircuitBreakerClosed = "fusioncache.backplane.circuit_breaker.closed";
+		public const string DistributedCircuitBreakerState = "fusioncache.distributed.circuit_breaker.state";
+		public const string BackplaneCircuitBreakerState = "fusioncache.backplane.circuit_breaker.state";
 		public const string BackplaneMessageAction = "fusioncache.backplane.message_action";
 		public const string BackplaneMessageSourceId = "fusioncache.backplane.message_source_id";
 	}

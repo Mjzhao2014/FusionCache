@@ -141,6 +141,42 @@ public static class TestsUtils
 		return typeof(BackplaneAccessor).GetField("_backplane", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(bpa) as TBackplane;
 	}
 
+	internal static CircuitBreakerState GetDistributedCacheCircuitBreakerState(IFusionCache cache)
+	{
+		var dca = typeof(FusionCache).GetField("_dca", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache) as DistributedCacheAccessor;
+		if (dca is null)
+			return CircuitBreakerState.Closed;
+
+		return dca.CircuitBreakerState;
+	}
+
+	internal static int GetDistributedCacheCircuitBreakerFailureCount(IFusionCache cache)
+	{
+		var dca = typeof(FusionCache).GetField("_dca", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache) as DistributedCacheAccessor;
+		if (dca is null)
+			return 0;
+
+		return dca.CircuitBreakerFailureCount;
+	}
+
+	internal static CircuitBreakerState GetBackplaneCircuitBreakerState(IFusionCache cache)
+	{
+		var bpa = typeof(FusionCache).GetField("_bpa", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache) as BackplaneAccessor;
+		if (bpa is null)
+			return CircuitBreakerState.Closed;
+
+		return bpa.CircuitBreakerState;
+	}
+
+	internal static int GetBackplaneCircuitBreakerFailureCount(IFusionCache cache)
+	{
+		var bpa = typeof(FusionCache).GetField("_bpa", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache) as BackplaneAccessor;
+		if (bpa is null)
+			return 0;
+
+		return bpa.CircuitBreakerFailureCount;
+	}
+
 	public static RedisBackplaneOptions? GetRedisBackplaneOptions(IFusionCache cache)
 	{
 		var backplane = GetBackplane<RedisBackplane>(cache);
@@ -153,6 +189,25 @@ public static class TestsUtils
 	public static IFusionCachePlugin[]? GetPlugins(IFusionCache cache)
 	{
 		return (typeof(FusionCache).GetField("_plugins", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(cache) as List<IFusionCachePlugin>)?.ToArray();
+	}
+
+	public static bool WaitForCircuitBreakerStateCount(Dictionary<CircuitBreakerState, int> stateCounts, CircuitBreakerState state, int expectedCount, TimeSpan timeout)
+	{
+		return SpinWait.SpinUntil(() =>
+		{
+			lock (stateCounts)
+			{
+				return stateCounts.TryGetValue(state, out var current) && current >= expectedCount;
+			}
+		}, timeout);
+	}
+
+	public static int GetCircuitBreakerStateCount(Dictionary<CircuitBreakerState, int> stateCounts, CircuitBreakerState state)
+	{
+		lock (stateCounts)
+		{
+			return stateCounts.TryGetValue(state, out var current) ? current : 0;
+		}
 	}
 
 	private static readonly TimeSpan StopwatchExtraPadding = TimeSpan.FromMilliseconds(5);
