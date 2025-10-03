@@ -363,16 +363,6 @@ public sealed partial class FusionCache
 		return new DependencyRegistrationResult(hadExistingChildrenBefore);
 	}
 
-	private void AddDependencyEdge(string parentKey, string childKey)
-	{
-		if (string.IsNullOrEmpty(parentKey) || string.IsNullOrEmpty(childKey))
-			return;
-		lock (_dependencyGraphLock)
-		{
-			AddDependencyEdgeLocked(parentKey, childKey);
-		}
-	}
-
 	private void AddDependencyEdgeLocked(string parentKey, string childKey)
 	{
 		if (string.IsNullOrEmpty(parentKey) || string.IsNullOrEmpty(childKey))
