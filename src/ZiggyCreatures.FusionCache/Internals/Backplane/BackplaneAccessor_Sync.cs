@@ -177,6 +177,17 @@ internal partial class BackplaneAccessor
 		return Publish(operationId, message, options, isAutoRecovery, isBackground, token);
 	}
 
+	public bool PublishDependencyCascade(string operationId, string key, long timestamp, FusionCacheEntryOptions options, bool isAutoRecovery, bool isBackground, CancellationToken token)
+	{
+		if (_logger?.IsEnabled(LogLevel.Debug) ?? false)
+			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] publishing dependency cascade", _options.CacheName, _options.InstanceId, operationId, key);
+
+
+		var message = BackplaneMessage.CreateForDependencyCascade(_cache.InstanceId, key, timestamp);
+
+		return Publish(operationId, message, options, isAutoRecovery, isBackground, token);
+	}
+
 	private void HandleConnect(BackplaneConnectionInfo info)
 	{
 		var operationId = FusionCacheInternalUtils.MaybeGenerateOperationId(_logger);
@@ -296,17 +307,24 @@ internal partial class BackplaneAccessor
 				// HANDLE REMOVE
 				_cache.RemoveMemoryEntryInternal(operationId, message.CacheKey!);
 				break;
-			case BackplaneMessageAction.EntryExpire:
-				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
-					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification has been received from remote cache {RemoteCacheInstanceId} (EXPIRE)", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
+		case BackplaneMessageAction.EntryExpire:
+			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification has been received from remote cache {RemoteCacheInstanceId} (EXPIRE)", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
 
-				// HANDLE EXPIRE
-				_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
-				break;
-			default:
-				// HANDLE UNKNOWN: DO NOTHING
-				if (_logger?.IsEnabled(_options.BackplaneErrorsLogLevel) ?? false)
-					_logger.Log(_options.BackplaneErrorsLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] an backplane notification has been received from remote cache {RemoteCacheInstanceId} for an unknown action {Action}", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId, message.Action);
+			// HANDLE EXPIRE
+			_cache.ExpireMemoryEntryInternal(operationId, message.CacheKey!, message.Timestamp);
+			break;
+		case BackplaneMessageAction.DependencyCascade:
+			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] a backplane notification has been received from remote cache {RemoteCacheInstanceId} (DEPENDENCY CASCADE)", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId);
+
+
+			_cache.CascadeInvalidateFromExternal(operationId, message.CacheKey!);
+			break;
+		default:
+			// HANDLE UNKNOWN: DO NOTHING
+			if (_logger?.IsEnabled(_options.BackplaneErrorsLogLevel) ?? false)
+				_logger.Log(_options.BackplaneErrorsLogLevel, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] an backplane notification has been received from remote cache {RemoteCacheInstanceId} for an unknown action {Action}", _cache.CacheName, _cache.InstanceId, operationId, message.CacheKey, message.SourceId, message.Action);
 
 				// ACTIVITY
 				activity?.SetStatus(ActivityStatusCode.Error, Activities.EventNames.BackplaneIncomingMessageUnknownAction);
@@ -331,11 +349,13 @@ internal partial class BackplaneAccessor
 
 		var memoryEntry = mca.GetEntryOrNull(operationId, cacheKey);
 
-		// IF NO MEMORY ENTRY -> DO NOTHING
+		// IF NO MEMORY ENTRY -> CASCADE IF NEEDED
 		if (memoryEntry is null)
 		{
 			if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
-				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] no memory entry, ignoring incoming backplane message", _cache.CacheName, _cache.InstanceId, operationId, cacheKey);
+				_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): [BP] no memory entry, cascading via dependency graph", _cache.CacheName, _cache.InstanceId, operationId, cacheKey);
+
+			_cache.CascadeInvalidateFromExternal(operationId, cacheKey);
 			return;
 		}
 
@@ -390,6 +410,7 @@ internal partial class BackplaneAccessor
 		}
 
 		_cache.ExpireMemoryEntryInternal(operationId, cacheKey, message.Timestamp);
+		_cache.CascadeInvalidateFromExternal(operationId, cacheKey);
 	}
 
 	private void MaybeUpdateTaggingTimestamp(string operationId, BackplaneMessage message)

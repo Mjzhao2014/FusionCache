@@ -42,6 +42,7 @@ public partial class FusionCache
 										_logger.LogTrace("FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): distributed entry found ({DistributedTimestamp}) is more recent than the current memory entry ({MemoryTimestamp}): using it", CacheName, InstanceId, operationId, key, distributedEntry?.Timestamp, memoryEntry?.Timestamp);
 
 									_mca.SetEntry<TValue>(operationId, key, FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options), options);
+									MarkKeyAsMaterialized(key);
 								}
 							}
 							finally
@@ -81,7 +82,7 @@ public partial class FusionCache
 		});
 	}
 
-	private IFusionCacheMemoryEntry? GetOrSetEntryInternal<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
+	private (IFusionCacheMemoryEntry? Entry, bool HasNewValue) GetOrSetEntryInternal<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, TValue> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
 	{
 		options ??= _defaultEntryOptions;
 
@@ -98,7 +99,7 @@ public partial class FusionCache
 		// TAGGING
 		if (memoryEntry is not null)
 		{
-			(memoryEntry, memoryEntryIsValid) = CheckEntrySecondaryExpiration(operationId, key, memoryEntry, false, token);
+			(memoryEntry, memoryEntryIsValid) = CheckEntrySecondaryExpiration(operationId, key, memoryEntry, true, token);
 		}
 
 		if (memoryEntryIsValid)
@@ -136,7 +137,7 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
-			return memoryEntry;
+			return (memoryEntry, false);
 		}
 
 		IFusionCacheMemoryEntry? entry;
@@ -151,15 +152,13 @@ public partial class FusionCache
 			if (memoryLockObj is null && options.IsFailSafeEnabled && memoryEntry is not null)
 			{
 				// IF THE MEMORY LOCK HAS NOT BEEN ACQUIRED
-
 				// + THERE IS A FALLBACK ENTRY
 				// + FAIL-SAFE IS ENABLED
 				// --> USE IT (WITHOUT SAVING IT, SINCE THE ALREADY RUNNING FACTORY WILL DO IT ANYWAY)
 
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry.IsStale(), activity);
-
-				return memoryEntry;
+				return (memoryEntry, false);
 			}
 
 			// TRY AGAIN WITH MEMORY CACHE (AFTER THE MEMORY LOCK HAS BEEN ACQUIRED, MAYBE SOMETHING CHANGED)
@@ -171,7 +170,7 @@ public partial class FusionCache
 			// TAGGING
 			if (memoryEntry is not null)
 			{
-				(memoryEntry, memoryEntryIsValid) = CheckEntrySecondaryExpiration(operationId, key, memoryEntry, false, token);
+				(memoryEntry, memoryEntryIsValid) = CheckEntrySecondaryExpiration(operationId, key, memoryEntry, true, token);
 			}
 
 			if (memoryEntryIsValid)
@@ -182,7 +181,7 @@ public partial class FusionCache
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
-				return memoryEntry;
+				return (memoryEntry, false);
 			}
 
 			// TRY WITH DISTRIBUTED CACHE (IF ANY)
@@ -203,7 +202,7 @@ public partial class FusionCache
 			// TAGGING (DISTRIBUTED)
 			if (distributedEntry is not null)
 			{
-				(distributedEntry, distributedEntryIsValid) = CheckEntrySecondaryExpiration(operationId, key, distributedEntry, false, token);
+				(distributedEntry, distributedEntryIsValid) = CheckEntrySecondaryExpiration(operationId, key, distributedEntry, true, token);
 			}
 
 			if (distributedEntryIsValid)
@@ -323,6 +322,7 @@ public partial class FusionCache
 				if (_mca.ShouldWrite(options))
 				{
 					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					MarkKeyAsMaterialized(key);
 				}
 			}
 		}
@@ -359,7 +359,7 @@ public partial class FusionCache
 			_events.OnMiss(operationId, key, activity);
 		}
 
-		return entry;
+		return (entry, hasNewValue);
 	}
 
 	/// <inheritdoc/>
@@ -391,7 +391,18 @@ public partial class FusionCache
 
 		try
 		{
-			var entry = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token);
+			// ensure options has a value to attach dependencies to
+			options ??= _defaultEntryOptions;
+			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
+			var (entry, hasNewValue) = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token);
+			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+				ClearCascadeInvalidation(key);
+			if (hasNewValue && (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet))
+			{
+				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
+			}
 
 			if (entry is null)
 			{
@@ -439,7 +450,17 @@ public partial class FusionCache
 
 		try
 		{
-			var entry = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, (_, _) => defaultValue, false, default, options, activity, token);
+			options ??= _defaultEntryOptions;
+			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
+			var (entry, hasNewValue) = GetOrSetEntryInternal<TValue>(operationId, key, tagsArray, (_, _) => defaultValue, false, default, options, activity, token);
+			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+				ClearCascadeInvalidation(key);
+			if (hasNewValue && (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet))
+			{
+				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
+			}
 
 			if (entry is null)
 			{
@@ -496,6 +517,22 @@ public partial class FusionCache
 
 		var dca = DistributedCacheAccessor;
 
+		if (IsCascadeInvalidated(key))
+		{
+			if (options.AllowStaleOnReadOnly && memoryEntry is not null)
+			{
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry (cascade-invalidated)", CacheName, InstanceId, operationId, key);
+
+				_events.OnHit(operationId, key, true, activity);
+
+				return memoryEntry;
+			}
+
+			_events.OnMiss(operationId, key, activity);
+			return null;
+		}
+
 		// EARLY RETURN: NO USABLE DISTRIBUTED CACHE
 		if ((memoryEntry is not null && dca.ShouldReadWhenStale(options) == false) || dca.CanBeUsed(operationId, key) == false)
 		{
@@ -539,6 +576,7 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				MarkKeyAsMaterialized(key);
 			}
 
 			// EVENT
@@ -563,6 +601,7 @@ public partial class FusionCache
 				if (_mca.ShouldWrite(options))
 				{
 					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+					MarkKeyAsMaterialized(key);
 				}
 
 				// EVENT
@@ -616,6 +655,11 @@ public partial class FusionCache
 
 			if (entry is null)
 			{
+				if (HasRegisteredChildren(key))
+				{
+					CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
+				}
+
 				if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 					_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): TryGet<T> return (no value)", CacheName, InstanceId, operationId, key);
 
@@ -663,6 +707,11 @@ public partial class FusionCache
 
 			if (entry is null)
 			{
+				if (HasRegisteredChildren(key))
+				{
+					CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
+				}
+
 				if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 					_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrDefault<T> return (default value)", CacheName, InstanceId, operationId, key);
 
@@ -709,12 +758,19 @@ public partial class FusionCache
 
 		try
 		{
+			// ensure we have entry options
+			options ??= _defaultEntryOptions;
+			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
+			// Register any dependency edges declared for this entry and capture existing children state
+			RegisterDependencies(key, options.Dependencies);
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
+				MarkKeyAsMaterialized(key);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -724,6 +780,12 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			ClearCascadeInvalidation(key);
+			// After setting, cascade invalidation when this key was already materialized or has existing children waiting on it
+			if (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet)
+			{
+				CascadeInvalidate(operationId, key, options, token, publishToBackplane: true);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -759,6 +821,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnRemove(operationId, key);
+
+			RemoveIncomingDependenciesForKey(key);
 		}
 		catch (Exception exc)
 		{
@@ -780,6 +844,8 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		RemoveInternal(key, options, token);
+		CascadeInvalidate(MaybeGenerateOperationId(), key, options, token, publishToBackplane: true);
+		RemoveIncomingDependenciesForKey(key);
 	}
 
 	// EXPIRE
@@ -796,9 +862,10 @@ public partial class FusionCache
 
 		try
 		{
+			var expired = false;
 			if (_mca.ShouldWrite(options))
 			{
-				_mca.ExpireEntry(operationId, key, null);
+				expired = _mca.ExpireEntry(operationId, key, null);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -808,6 +875,11 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnExpire(operationId, key);
+
+			if (expired)
+			{
+				RemoveIncomingDependenciesForKey(key);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -829,6 +901,7 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		ExpireInternal(key, options, token);
+		CascadeInvalidate(MaybeGenerateOperationId(), key, options, token, publishToBackplane: true);
 	}
 
 	// TAGGING
@@ -879,6 +952,7 @@ public partial class FusionCache
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): cascade remove entry", CacheName, InstanceId, operationId, key);
 
 				RemoveInternal(key, _cascadeRemoveByTagEntryOptions, token);
+				CascadeInvalidate(operationId, key, _cascadeRemoveByTagEntryOptions, token, publishToBackplane: true);
 
 				return (null, false);
 			}
@@ -904,6 +978,7 @@ public partial class FusionCache
 						_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): cascade expire entry", CacheName, InstanceId, operationId, key);
 
 					ExpireInternal(key, _cascadeRemoveByTagEntryOptions, token);
+					CascadeInvalidate(operationId, key, _cascadeRemoveByTagEntryOptions, token, publishToBackplane: true);
 
 					return (entry, false);
 				}
@@ -951,6 +1026,33 @@ public partial class FusionCache
 			ExpireInternal(key, _cascadeRemoveByTagEntryOptions, token);
 
 			return (entry, false);
+		}
+
+		if (executeCascadeAction)
+		{
+			var parentKeys = GetParentDependenciesSnapshot(key);
+			if (parentKeys.Length > 0)
+			{
+				foreach (var parentKey in parentKeys)
+				{
+					if (HasKeyEverBeenMaterialized(parentKey) == false)
+						continue;
+
+					var (parentEntry, parentIsValid) = _mca.TryGetEntry(operationId, parentKey);
+					if (parentEntry is not null)
+					{
+						(parentEntry, parentIsValid) = CheckEntrySecondaryExpiration(operationId, parentKey, parentEntry, false, token);
+					}
+					if (parentEntry is null || parentIsValid == false)
+					{
+						var cascadeOptions = CreateCascadeEntryOptions();
+						RemoveInternal(key, cascadeOptions, token);
+						CascadeInvalidate(operationId, key, cascadeOptions, token, publishToBackplane: true);
+
+						return (null, false);
+					}
+				}
+			}
 		}
 
 		return (entry, entry.IsLogicallyExpired() == false);

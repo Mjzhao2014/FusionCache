@@ -59,6 +59,12 @@ public sealed class FusionCacheEntryOptions
 	}
 
 	/// <summary>
+	/// Any dependencies declared for this entry: used to build a parent/child relationship dependency graph
+	/// allowing automatic cascading invalidation when upstream keys change.
+	/// </summary>
+	internal DependencyBuilder? Dependencies { get; set; }
+
+	/// <summary>
 	/// The amount of time after which a cache entry is <strong>considered expired</strong>.
 	/// <br/><br/>
 	/// Please note the wording "considered expired" here: what it means is that, although from the OUTSIDE what is observed is always the same (a piece of data logically expires after the specified <see cref="Duration"/>), on the INSIDE things change depending on the fact that fail-safe is enabled or not.
@@ -1125,6 +1131,9 @@ public sealed class FusionCacheEntryOptions
 
 			SkipMemoryCacheRead = SkipMemoryCacheRead,
 			SkipMemoryCacheWrite = SkipMemoryCacheWrite,
+
+			// duplicate any declared dependencies
+			Dependencies = Dependencies,
 
 			EnableAutoClone = EnableAutoClone
 		};
