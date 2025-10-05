@@ -324,6 +324,7 @@ public sealed partial class FusionCache
 		}
 		finally
 		{
+			UnmarkKeyAsMaterialized(key);
 			RemoveIncomingDependenciesForKey(key);
 		}
 	}
@@ -601,6 +602,14 @@ public sealed partial class FusionCache
 		lock (_dependencyGraphLock)
 		{
 			return _materializedKeys.Contains(key);
+		}
+	}
+
+	private void UnmarkKeyAsMaterialized(string key)
+	{
+		lock (_dependencyGraphLock)
+		{
+			_materializedKeys.Remove(key);
 		}
 	}
 
@@ -1126,6 +1135,7 @@ public sealed partial class FusionCache
 			_logger.Log(LogLevel.Debug, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): calling RemoveMemoryEntryInternal", CacheName, InstanceId, operationId, key);
 
 		_mca.RemoveEntry(operationId, key);
+		UnmarkKeyAsMaterialized(key);
 		CascadeInvalidate(operationId, key, null, default, publishToBackplane: false);
 		RemoveIncomingDependenciesForKey(key);
 	}
@@ -1138,6 +1148,7 @@ public sealed partial class FusionCache
 		var expired = _mca.ExpireEntry(operationId, key, timestampThreshold);
 		if (expired)
 		{
+			UnmarkKeyAsMaterialized(key);
 			CascadeInvalidate(operationId, key, null, default, publishToBackplane: false);
 			RemoveIncomingDependenciesForKey(key);
 		}

@@ -812,6 +812,7 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.RemoveEntry(operationId, key);
+				UnmarkKeyAsMaterialized(key);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -878,6 +879,7 @@ public partial class FusionCache
 
 			if (expired)
 			{
+				UnmarkKeyAsMaterialized(key);
 				RemoveIncomingDependenciesForKey(key);
 			}
 		}
