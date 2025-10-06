@@ -114,6 +114,9 @@ public class FusionCacheOptions
 		PluginsInfoLogLevel = LogLevel.Information;
 		PluginsErrorsLogLevel = LogLevel.Error;
 		MissingCacheKeyPrefixWarningLogLevel = LogLevel.Warning;
+
+		// initialize cascade options
+		Cascade = new CascadeOptions();
 	}
 
 	/// <summary>
@@ -527,6 +530,11 @@ public class FusionCacheOptions
 	/// </summary>
 	public LogLevel MissingCacheKeyPrefixWarningLogLevel { get; set; }
 
+	/// <summary>
+	/// Global cascade settings controlling how dependency invalidation propagates.
+	/// </summary>
+	public CascadeOptions Cascade { get; set; } = new CascadeOptions();
+
 	FusionCacheOptions IOptions<FusionCacheOptions>.Value
 	{
 		get { return this; }
@@ -597,6 +605,7 @@ public class FusionCacheOptions
 			PluginsInfoLogLevel = PluginsInfoLogLevel,
 
 			MissingCacheKeyPrefixWarningLogLevel = MissingCacheKeyPrefixWarningLogLevel,
+			Cascade = Cascade.Duplicate(),
 		};
 
 		return res;

@@ -65,6 +65,7 @@ public class BackplaneMessage
 			case BackplaneMessageAction.EntrySet:
 			case BackplaneMessageAction.EntryRemove:
 			case BackplaneMessageAction.EntryExpire:
+			case BackplaneMessageAction.DependencyCascade:
 				if (string.IsNullOrEmpty(CacheKey))
 					return false;
 				return true;
@@ -129,6 +130,26 @@ public class BackplaneMessage
 		{
 			SourceId = sourceId,
 			Action = BackplaneMessageAction.EntryExpire,
+			CacheKey = cacheKey
+		};
+	}
+
+	/// <summary>
+	/// Creates a message to notify dependent caches that a cascade invalidation should be performed for the specified parent key.
+	/// </summary>
+	/// <param name="sourceId">The cache InstanceId of the source.</param>
+	/// <param name="cacheKey">The parent cache key that triggered the cascade.</param>
+	/// <param name="timestamp">The timestamp.</param>
+	/// <returns>The message.</returns>
+	public static BackplaneMessage CreateForDependencyCascade(string sourceId, string cacheKey, long timestamp)
+	{
+		if (string.IsNullOrEmpty(cacheKey))
+			throw new ArgumentException("The cache key cannot be null or empty", nameof(cacheKey));
+
+		return new BackplaneMessage(timestamp)
+		{
+			SourceId = sourceId,
+			Action = BackplaneMessageAction.DependencyCascade,
 			CacheKey = cacheKey
 		};
 	}

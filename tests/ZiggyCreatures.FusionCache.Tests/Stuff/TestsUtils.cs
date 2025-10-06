@@ -70,6 +70,21 @@ public static class TestsUtils
 		return prefix + key;
 	}
 
+	public static string GetDistributedCacheKey(IFusionCache cache, string key)
+	{
+		if (cache is null)
+			throw new ArgumentNullException(nameof(cache));
+
+		var options = cache.GetOptions();
+		var effectiveKey = MaybePreProcessCacheKey(key, options.CacheKeyPrefix);
+		return options.DistributedCacheKeyModifierMode switch
+		{
+			CacheKeyModifierMode.Prefix => FusionCacheOptions.DistributedCacheWireFormatVersion + FusionCacheOptions.DistributedCacheWireFormatSeparator + effectiveKey,
+			CacheKeyModifierMode.Suffix => effectiveKey + FusionCacheOptions.DistributedCacheWireFormatSeparator + FusionCacheOptions.DistributedCacheWireFormatVersion,
+			_ => effectiveKey,
+		};
+	}
+
 	public static TimeSpan PlusALittleBit(this TimeSpan ts)
 	{
 		return ts + TimeSpan.FromMilliseconds(250);

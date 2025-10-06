@@ -42,6 +42,7 @@ public partial class FusionCache
 										_logger.LogTrace("FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): distributed entry found ({DistributedTimestamp}) is more recent than the current memory entry ({MemoryTimestamp}): using it", CacheName, InstanceId, operationId, key, distributedEntry?.Timestamp, memoryEntry?.Timestamp);
 
 									_mca.SetEntry<TValue>(operationId, key, FusionCacheMemoryEntry<TValue>.CreateFromOtherEntry(distributedEntry!, options), options);
+									MarkKeyAsMaterialized(key);
 								}
 							}
 							finally
@@ -81,7 +82,7 @@ public partial class FusionCache
 		});
 	}
 
-	private async ValueTask<IFusionCacheMemoryEntry?> GetOrSetEntryInternalAsync<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, Task<TValue>> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
+	private async ValueTask<(IFusionCacheMemoryEntry? Entry, bool HasNewValue)> GetOrSetEntryInternalAsync<TValue>(string operationId, string key, string[]? tags, Func<FusionCacheFactoryExecutionContext<TValue>, CancellationToken, Task<TValue>> factory, bool isRealFactory, MaybeValue<TValue> failSafeDefaultValue, FusionCacheEntryOptions? options, Activity? activity, CancellationToken token)
 	{
 		options ??= _defaultEntryOptions;
 
@@ -98,7 +99,7 @@ public partial class FusionCache
 		// TAGGING
 		if (memoryEntry is not null)
 		{
-			(memoryEntry, memoryEntryIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, key, memoryEntry, false, token).ConfigureAwait(false);
+			(memoryEntry, memoryEntryIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, key, memoryEntry, true, token).ConfigureAwait(false);
 		}
 
 		if (memoryEntryIsValid)
@@ -136,7 +137,7 @@ public partial class FusionCache
 			// EVENT
 			_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
-			return memoryEntry;
+			return (memoryEntry, false);
 		}
 
 		IFusionCacheMemoryEntry? entry;
@@ -159,7 +160,7 @@ public partial class FusionCache
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry.IsStale(), activity);
 
-				return memoryEntry;
+				return (memoryEntry, false);
 			}
 
 			// TRY AGAIN WITH MEMORY CACHE (AFTER THE MEMORY LOCK HAS BEEN ACQUIRED, MAYBE SOMETHING CHANGED)
@@ -171,7 +172,7 @@ public partial class FusionCache
 			// TAGGING
 			if (memoryEntry is not null)
 			{
-				(memoryEntry, memoryEntryIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, key, memoryEntry, false, token).ConfigureAwait(false);
+				(memoryEntry, memoryEntryIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, key, memoryEntry, true, token).ConfigureAwait(false);
 			}
 
 			if (memoryEntryIsValid)
@@ -182,28 +183,36 @@ public partial class FusionCache
 				// EVENT
 				_events.OnHit(operationId, key, memoryEntryIsValid == false || memoryEntry!.IsStale(), activity);
 
-				return memoryEntry;
+				return (memoryEntry, false);
 			}
 
 			// TRY WITH DISTRIBUTED CACHE (IF ANY)
 			FusionCacheDistributedEntry<TValue>? distributedEntry = null;
 			bool distributedEntryIsValid = false;
 
-			var dca = DistributedCacheAccessor;
-			if (dca.ShouldRead(options) && dca.CanBeUsed(operationId, key))
+		var cascadeInvalidated = IsCascadeInvalidated(key);
+		var dca = DistributedCacheAccessor;
+		var shouldReadFromDistributed = cascadeInvalidated == false
+			&& dca.ShouldRead(options)
+			&& dca.CanBeUsed(operationId, key);
+		if (shouldReadFromDistributed)
+		{
+			if ((memoryEntry is not null && dca.ShouldReadWhenStale(options) == false) == false)
 			{
-				if ((memoryEntry is not null && dca.ShouldReadWhenStale(options) == false) == false)
-				{
-					token.ThrowIfCancellationRequested();
+				token.ThrowIfCancellationRequested();
 
-					(distributedEntry, distributedEntryIsValid) = await _dca!.TryGetEntryAsync<TValue>(operationId, key, options, memoryEntry is not null, null, token).ConfigureAwait(false);
-				}
+				(distributedEntry, distributedEntryIsValid) = await _dca!.TryGetEntryAsync<TValue>(operationId, key, options, memoryEntry is not null, null, token).ConfigureAwait(false);
 			}
+		}
+		else if (cascadeInvalidated && _logger?.IsEnabled(LogLevel.Trace) == true)
+		{
+			_logger.LogTrace("FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): skipping distributed read due to cascade invalidation", CacheName, InstanceId, operationId, key);
+		}
 
 			// TAGGING (DISTRIBUTED)
 			if (distributedEntry is not null)
 			{
-				(distributedEntry, distributedEntryIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, key, distributedEntry, false, token).ConfigureAwait(false);
+				(distributedEntry, distributedEntryIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, key, distributedEntry, true, token).ConfigureAwait(false);
 			}
 
 			if (distributedEntryIsValid)
@@ -323,6 +332,7 @@ public partial class FusionCache
 				if (_mca.ShouldWrite(options))
 				{
 					_mca.SetEntry<TValue>(operationId, key, entry, options, ReferenceEquals(memoryEntry, entry));
+					MarkKeyAsMaterialized(key);
 				}
 			}
 		}
@@ -359,7 +369,7 @@ public partial class FusionCache
 			_events.OnMiss(operationId, key, activity);
 		}
 
-		return entry;
+		return (entry, hasNewValue);
 	}
 
 	/// <inheritdoc/>
@@ -391,7 +401,17 @@ public partial class FusionCache
 
 		try
 		{
-			var entry = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token).ConfigureAwait(false);
+			options ??= _defaultEntryOptions;
+			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
+			var (entry, hasNewValue) = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, factory, true, failSafeDefaultValue, options, activity, token).ConfigureAwait(false);
+			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+				ClearCascadeInvalidation(key);
+			if (hasNewValue && (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet))
+			{
+				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
+			}
 
 			if (entry is null)
 			{
@@ -439,7 +459,17 @@ public partial class FusionCache
 
 		try
 		{
-			var entry = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, (_, _) => Task.FromResult(defaultValue), false, default, options, activity, token).ConfigureAwait(false);
+			options ??= _defaultEntryOptions;
+			var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+			var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
+			var (entry, hasNewValue) = await GetOrSetEntryInternalAsync<TValue>(operationId, key, tagsArray, (_, _) => Task.FromResult(defaultValue), false, default, options, activity, token).ConfigureAwait(false);
+			RegisterDependencies(key, options.Dependencies);
+			if (hasNewValue)
+				ClearCascadeInvalidation(key);
+			if (hasNewValue && (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet))
+			{
+				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
+			}
 
 			if (entry is null)
 			{
@@ -496,6 +526,22 @@ public partial class FusionCache
 
 		var dca = DistributedCacheAccessor;
 
+		if (IsCascadeInvalidated(key))
+		{
+			if (options.AllowStaleOnReadOnly && memoryEntry is not null)
+			{
+				if (_logger?.IsEnabled(LogLevel.Trace) ?? false)
+					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): using memory entry (cascade-invalidated)", CacheName, InstanceId, operationId, key);
+
+				_events.OnHit(operationId, key, true, activity);
+
+				return memoryEntry;
+			}
+
+			_events.OnMiss(operationId, key, activity);
+			return null;
+		}
+
 		// EARLY RETURN: NO USABLE DISTRIBUTED CACHE
 		if ((memoryEntry is not null && dca.ShouldReadWhenStale(options) == false) || dca.CanBeUsed(operationId, key) == false)
 		{
@@ -539,6 +585,7 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+				MarkKeyAsMaterialized(key);
 			}
 
 			// EVENT
@@ -563,6 +610,7 @@ public partial class FusionCache
 				if (_mca.ShouldWrite(options))
 				{
 					_mca.SetEntry<TValue>(operationId, key, memoryEntry, options);
+					MarkKeyAsMaterialized(key);
 				}
 
 				// EVENT
@@ -616,6 +664,11 @@ public partial class FusionCache
 
 			if (entry is null)
 			{
+				if (HasRegisteredChildren(key))
+				{
+					await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
+				}
+
 				if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 					_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): TryGetAsync<T> return (no value)", CacheName, InstanceId, operationId, key);
 
@@ -663,6 +716,11 @@ public partial class FusionCache
 
 			if (entry is null)
 			{
+				if (HasRegisteredChildren(key))
+				{
+					await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
+				}
+
 				if (_logger?.IsEnabled(LogLevel.Information) ?? false)
 					_logger.Log(LogLevel.Information, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): GetOrDefaultAsync<T> return (default value)", CacheName, InstanceId, operationId, key);
 
@@ -707,14 +765,19 @@ public partial class FusionCache
 		// ACTIVITY
 		using var activity = Activities.Source.StartActivityWithCommonTags(Activities.Names.Set, CacheName, InstanceId, key, operationId);
 
+		var wasMaterializedBeforeSet = HasKeyEverBeenMaterialized(key);
+		var hadRegisteredChildrenBeforeSet = HasRegisteredChildren(key);
+
 		try
 		{
+			RegisterDependencies(key, options.Dependencies);
 			// TODO: MAYBE FIND A WAY TO PASS LASTMODIFIED/ETAG HERE
 			var entry = FusionCacheMemoryEntry<TValue>.CreateFromOptions(value, null, tagsArray, options, false, null, null);
 
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.SetEntry<TValue>(operationId, key, entry, options);
+				MarkKeyAsMaterialized(key);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -724,6 +787,11 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnSet(operationId, key);
+			ClearCascadeInvalidation(key);
+			if (wasMaterializedBeforeSet || hadRegisteredChildrenBeforeSet)
+			{
+				await CascadeInvalidateAsync(operationId, key, options, token, publishToBackplane: true).ConfigureAwait(false);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -750,6 +818,7 @@ public partial class FusionCache
 			if (_mca.ShouldWrite(options))
 			{
 				_mca.RemoveEntry(operationId, key);
+				UnmarkKeyAsMaterialized(key);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -759,6 +828,8 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnRemove(operationId, key);
+
+			RemoveIncomingDependenciesForKey(key);
 		}
 		catch (Exception exc)
 		{
@@ -780,6 +851,8 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		await RemoveInternalAsync(key, options, token).ConfigureAwait(false);
+	await CascadeInvalidateAsync(MaybeGenerateOperationId(), key, options, token, publishToBackplane: true).ConfigureAwait(false);
+		RemoveIncomingDependenciesForKey(key);
 	}
 
 	// EXPIRE
@@ -796,9 +869,10 @@ public partial class FusionCache
 
 		try
 		{
+			var expired = false;
 			if (_mca.ShouldWrite(options))
 			{
-				_mca.ExpireEntry(operationId, key, null);
+				expired = _mca.ExpireEntry(operationId, key, null);
 			}
 
 			if (RequiresDistributedOperations(options))
@@ -808,6 +882,12 @@ public partial class FusionCache
 
 			// EVENT
 			_events.OnExpire(operationId, key);
+
+			if (expired)
+			{
+				UnmarkKeyAsMaterialized(key);
+				RemoveIncomingDependenciesForKey(key);
+			}
 		}
 		catch (Exception exc)
 		{
@@ -829,6 +909,7 @@ public partial class FusionCache
 		options ??= _defaultEntryOptions;
 
 		await ExpireInternalAsync(key, options, token).ConfigureAwait(false);
+	await CascadeInvalidateAsync(MaybeGenerateOperationId(), key, options, token, publishToBackplane: true).ConfigureAwait(false);
 	}
 
 	// TAGGING
@@ -879,6 +960,7 @@ public partial class FusionCache
 					_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): cascade remove entry", CacheName, InstanceId, operationId, key);
 
 				await RemoveInternalAsync(key, _cascadeRemoveByTagEntryOptions, token).ConfigureAwait(false);
+				await CascadeInvalidateAsync(operationId, key, _cascadeRemoveByTagEntryOptions, token, publishToBackplane: true).ConfigureAwait(false);
 
 				return (null, false);
 			}
@@ -904,6 +986,7 @@ public partial class FusionCache
 						_logger.Log(LogLevel.Trace, "FUSION [N={CacheName} I={CacheInstanceId}] (O={CacheOperationId} K={CacheKey}): cascade expire entry", CacheName, InstanceId, operationId, key);
 
 					await ExpireInternalAsync(key, _cascadeRemoveByTagEntryOptions, token).ConfigureAwait(false);
+					await CascadeInvalidateAsync(operationId, key, _cascadeRemoveByTagEntryOptions, token, publishToBackplane: true).ConfigureAwait(false);
 
 					return (entry, false);
 				}
@@ -951,6 +1034,33 @@ public partial class FusionCache
 			await ExpireInternalAsync(key, _cascadeRemoveByTagEntryOptions, token).ConfigureAwait(false);
 
 			return (entry, false);
+		}
+
+		if (executeCascadeAction)
+		{
+			var parentKeys = GetParentDependenciesSnapshot(key);
+			if (parentKeys.Length > 0)
+			{
+				foreach (var parentKey in parentKeys)
+				{
+					if (HasKeyEverBeenMaterialized(parentKey) == false)
+						continue;
+
+					var (parentEntry, parentIsValid) = _mca.TryGetEntry(operationId, parentKey);
+					if (parentEntry is not null)
+					{
+						(parentEntry, parentIsValid) = await CheckEntrySecondaryExpirationAsync(operationId, parentKey, parentEntry, false, token).ConfigureAwait(false);
+					}
+					if (parentEntry is null || parentIsValid == false)
+					{
+					var cascadeOptions = CreateCascadeEntryOptions();
+					await RemoveInternalAsync(key, cascadeOptions, token).ConfigureAwait(false);
+					await CascadeInvalidateAsync(operationId, key, cascadeOptions, token, publishToBackplane: true).ConfigureAwait(false);
+
+						return (null, false);
+					}
+				}
+			}
 		}
 
 		return (entry, entry.IsLogicallyExpired() == false);
